@@ -15,6 +15,7 @@ OUT="$DIR/index.html"
     [ "$f" = "$SRC/p1-head.html" ] && continue
     cat "$f"
   done
+  printf '</body>\n</html>\n'   # anchors required by the arcade bundler's overlay injection
 } > "$OUT"
 echo "built $OUT ($(wc -c < "$OUT") bytes)"
 
