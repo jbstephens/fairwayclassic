@@ -170,3 +170,84 @@ particle pools and skips the flyover sway.
 
 Build: test/src/p*.html parts assembled by test/build.sh (glob order,
 p1-head first). NEVER hand-edit index.html.
+
+# FC-LOOK-1 — the beauty pass + UX bundle (locked 2026-09-17)
+
+John's verdict on v1: "The graphics are .. not good. The holes all look
+the same, the trees look like shit, there's no shadows or anything. And
+dude … where's all the lush shrubbery? And the player himself looks like
+a Lego guy. … Golf courses should be gorgeous." Decided — implement as
+written.
+
+## 1. Aim arc visibility (fix)
+
+Thicker, always-readable: bigger arc markers with a dark outline under a
+bright core (white core, deep-green/navy rim) so it reads on fairway,
+sky, and water alike; slight size taper toward landing; pulsing landing
+ring. Must stay legible in bright and shaded parts of the scene.
+
+## 2. Flyover rework (fix — decided choreography)
+
+ONE continuous slow shot, ~8–9 s: start above and behind the CUP looking
+back down the hole (green + its hazards fill the frame), fly smoothly
+along the hole's centerline toward the tee at gentle height — never
+looking straight down, never reversing — and settle seamlessly into the
+address camera behind the golfer. Ease-in-out; skippable with SOUTH
+after 1 s (unchanged). LOWFX keeps the same path (it's one camera, no
+extra cost).
+
+## 3. Bottom-right hole HUD (new)
+
+One panel, bottom-right: a top-down schematic minimap of the current
+hole — fairway shape, rough, bunkers (sand color), water, green, tee —
+drawn tee-at-bottom → green-at-top along the centerline. Overlaid: ball
+dot (per player color), aim line, and the PROJECTED LANDING point from
+the live arc sim (updates as you aim and as you change club/power
+regime). The club selector lives in this same panel (club name + carry
+yds + L1/R1 hint): toggling clubs visibly moves the projected landing
+marker on the map. Flat rgba panel (no backdrop-filter), couch-legible,
+canvas-drawn map baked per hole (not per frame).
+
+## 4. The look overhaul (the big one)
+
+Adopt the measured-free Pi pretty stack (lab 2026-09-12; PP-LOOK
+precedent — this game is single-viewport and low-motion, so it should
+EXCEED Powder Peak):
+- ACES filmic tone mapping + sRGB output (r147: outputEncoding =
+  sRGBEncoding). WATCH the double-sRGB trap: our baked vertex colors are
+  display-referred; compensate in the grade (gamma/black/gain knobs).
+- Lit pipeline: MeshLambert terrain/scenery with vertex colors (sun
+  directional + hemisphere + baked AO in the vertex bake).
+- ONE 1024px directional shadow map. LAW: casters CURATED — golfer,
+  flag, and the tree/shrub clusters near the play corridor only; terrain
+  NEVER casts; everything receives. Blob shadow stays under the ball.
+- One fullscreen post pass: vignette + warm grade + saturation, with
+  per-scene LOOK_TUNE knobs (PP pattern).
+- MSAA on (context antialias:true).
+- Sky: richer gradient dome + a low sun glow sprite + a few soft cloud
+  sprites (additive/alpha, cap ~15 sprites total).
+- `?look=0` escape hatch reverts to the v1 flat pipeline; expose
+  `window.__fcLook` internals (toggles + tune knobs) for live kiosk A/B.
+
+Art rebuilds with that pipeline:
+- TREES: real layered pines (stacked fronds with color variation, visible
+  trunks), plus magnolias/oaks (blob-canopy deciduous) for variety;
+  clusters, not picket rows; scale variation; understory.
+- LUSH SHRUBBERY EVERYWHERE: azalea banks in bloom (multi-tone pink/
+  crimson/white), boxwood hedges, flower beds at tees, pampas plumes on
+  7, wisteria/dogwood accents — per-hole planting palette in the hole
+  records so holes STOP LOOKING THE SAME (12/13 azalea walls, 2/11
+  dogwood whites, 10 camellia reds, 18 gallery-lined finish…).
+- Per-hole terrain identity: stronger (still camera-comfortable)
+  elevation, mow-stripe contrast, bunker lips with shadowed sand faces,
+  water with animated sparkle + reflected-sky gradient, creek banks with
+  stones on 12/13.
+- GOLFER rebuilt PP-LOOK-3 style (the skier precedent, ~640 tris, merged
+  meshes): proper proportions, cap with brim, polo + slacks, articulated
+  swing (address waggle, backswing, follow-through hold), P1/P2 outfit
+  colors; caddie-bag prop standing nearby at address.
+- Budgets (single viewport): steady-state ≤75k tris in view (hard cap
+  100k), true draw calls ≤80 counted via GL-context wrap (renderer.info
+  undercounts under shadow maps — PP law). Shadow-caster subset ≤~30k
+  tris. 60fps on the Pi is still the law; `?fx=low` additionally drops
+  the shadow map to blob shadows + halves sprites/particles.
