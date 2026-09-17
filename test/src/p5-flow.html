@@ -3,7 +3,14 @@
 
 let simTick = 0;
 const ROUND = { holes: [], idx: 0, label: '' };
-let flyT = 0, flyCurve = null, flyLook = null, flySkipOk = false;
+/* FC-LOOK-1 flyover: ONE continuous eased shot — above/behind the CUP,
+   down the centerline toward the tee, settling seamlessly into the address
+   camera.  Never looks straight down, never reverses.  flyRec is the
+   choreography witness the look-verify harness reads. */
+const FLY_DUR = 8.6;                 // seconds (band: 7.5–10)
+const FLY = { dStart: 0, dEnd: 0, acp: null };
+let flyT = 0;
+let flyRec = null;
 let swingT = 0, swingPower = 0, settleT = 0, bannerT = 0;
 let replayT = 0, replayActive = false;
 let peekOn = false, greadOn = false;
@@ -206,24 +213,15 @@ function startHole() {
     refreshHoleInfo();
     suggestClub(PLAYERS[turn]); aimAtPin(PLAYERS[turn]);
     refreshShotInfo(); refreshClub(); refreshWind();
-    // flyover spline: above the green, back down the hole, settle behind the tee
-    const gp = clPoint(CUR, CUR.len);
-    const mid1 = clWorld(CUR, CUR.len * 0.62, 0), mid2 = clWorld(CUR, CUR.len * 0.28, 0);
+    // FC-LOOK-1 flyover: the aim is the SAME aim beginTurn will compute, so
+    // the shot ends exactly on the address camera pose (seamless settle)
     const p0 = activeP();
-    SHOT.aimAng = Math.atan2(PIN.x - p0.ball.x, PIN.z - p0.ball.z);
     const acp = addressCamPos(p0);
-    flyCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(gp[0] + gp[2] * 26, elevAt(CUR, CUR.len) + 30, gp[1] + gp[3] * 26),
-      new THREE.Vector3(mid1[0], elevAt(CUR, CUR.len * 0.62) + 24, mid1[1]),
-      new THREE.Vector3(mid2[0], elevAt(CUR, CUR.len * 0.28) + 17, mid2[1]),
-      new THREE.Vector3(acp[0], acp[1], acp[2]),
-    ]);
-    flyLook = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(GREEN.x, GREEN.h + 2, GREEN.z),
-      new THREE.Vector3(mid2[0], elevAt(CUR, CUR.len * 0.28) + 4, mid2[1]),
-      new THREE.Vector3(acp[3], acp[4], acp[5]),
-    ]);
+    FLY.acp = acp;
+    FLY.dStart = CUR.len + 34;
+    FLY.dEnd = 12;
     flyT = 0;
+    flyRec = { minPitch: 90, lastD: 1e9, mono: true, endPos: null, n: 0 };
     state = 'flyover';
     camSnap();
     hudVisible(true);
@@ -340,6 +338,7 @@ function settleBall(msg, sub) {
   const p = activeP();
   p.ball.x = FLIGHT.x; p.ball.y = groundH(FLIGHT.x, FLIGHT.z); p.ball.z = FLIGHT.z;
   p.lie = surfAt(p.ball.x, p.ball.z);
+  MAPS.dirty = true;   // ball state changed → minimap redraws once
   refreshShotInfo();
   // stroke cap (Amateur): double par, then picked up
   if (DIFF === 'amateur' && !p.holed && p.strokes >= CUR.par * 2) {
@@ -360,6 +359,7 @@ function holeOut() {
   const hi = ROUND.holes[ROUND.idx];
   p.scores[hi] = p.strokes;
   p.ball.x = PIN.x; p.ball.z = PIN.z; p.ball.y = PIN.y;
+  MAPS.dirty = true;
   SFX.cup();
   const word = scoreWord(p.strokes, CUR.par);
   const d = p.strokes - CUR.par;
@@ -447,9 +447,9 @@ function tickSim() {
       }
       break;
     case 'flyover':
-      flyT += DT / 6.2;
+      flyT += DT / FLY_DUR;
       if (flyT >= 1) { showHint(''); beginTurn(); }
-      else if (IN.confirm && flyT > 1 / 6.2) { showHint(''); camSnap(); beginTurn(); }
+      else if (IN.confirm && flyT > 1 / FLY_DUR) { showHint(''); camSnap(); beginTurn(); }
       if (IN.pause) enterPause();
       break;
     case 'address': {
@@ -628,8 +628,8 @@ function updateVisuals(dt, now) {
     const bx = activeBall.position.x, bz = activeBall.position.z;
     SHADOW_BALL.position.set(bx, groundH(bx, bz) + 0.04, bz);
   } else SHADOW_BALL.visible = false;
-  // golfer
-  const showG = ['address', 'meter', 'swing', 'flight', 'settle', 'greenread'].includes(state) ||
+  // golfer (visible through the flyover too — the shot settles onto him)
+  const showG = ['flyover', 'address', 'meter', 'swing', 'flight', 'settle', 'greenread'].includes(state) ||
     (state === 'pause' && ['address', 'meter', 'swing'].includes(pausePrev));
   for (let i = 0; i < GOLFERS.length; i++) GOLFERS[i].visible = false;
   if (showG && p) {
@@ -639,14 +639,19 @@ function updateVisuals(dt, now) {
     const gx = p.ball.x + lx * 0.85, gz = p.ball.z + lz * 0.85;
     g.position.set(gx, groundH(gx, gz), gz);
     g.rotation.y = Math.atan2(p.ball.x - gx, p.ball.z - gz);
-    const arms = g.userData.arms;
-    if (state === 'meter') arms.rotation.z = -(SHOT.meterV / 100) * 2.0 - 0.1;
-    else if (state === 'swing') arms.rotation.z = lerp(-(swingPower) * 2.0 - 0.1, 1.7, smoothstep(swingT / 0.25));
-    else if (state === 'flight' && FLIGHT.t < 0.6) arms.rotation.z = 1.7;
-    else arms.rotation.z = -0.1 + Math.sin(visT * 1.3) * 0.03;
-    SHADOW_GOLFER.visible = true;
+    if (state === 'meter') golferPose(g, 'back', SHOT.meterV / 100, visT);
+    else if (state === 'swing') golferPose(g, 'thru', smoothstep(swingT / 0.25), visT, swingPower);
+    else if (state === 'flight' && FLIGHT.t < 0.6) golferPose(g, 'hold', 1, visT);
+    else golferPose(g, 'idle', 0, visT);
+    // the caddie bag stands off the golfer's left, facing play
+    BAG.visible = true;
+    const bx = p.ball.x + lx * 3.6 - aimDirX() * 1.4, bz = p.ball.z + lz * 3.6 - aimDirZ() * 1.4;
+    BAG.position.set(bx, groundH(bx, bz), bz);
+    BAG.rotation.y = SHOT.aimAng + 0.6;
+    // painted blob only when the real 1024 shadow isn't anchoring him
+    SHADOW_GOLFER.visible = !(LOOK && FX.shadow);
     SHADOW_GOLFER.position.set(gx, groundH(gx, gz) + 0.05, gz);
-  } else SHADOW_GOLFER.visible = false;
+  } else { SHADOW_GOLFER.visible = false; BAG.visible = false; }
   // aim arc
   arcPts.visible = (state === 'address' || state === 'meter') && !peekOn;
   ringMesh.visible = arcPts.visible && !SHOT.putter;
@@ -672,6 +677,14 @@ function updateVisuals(dt, now) {
     meterPctEl.textContent = Math.round(SHOT.meterV) + '%';
   }
   updateCamera(dt);
+  // the 1024 shadow box follows the camera's subject (a point just ahead)
+  if (LOOK && FX.shadow) {
+    _v2.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const fx2 = camera.position.x + _v2.x * 34, fz2 = camera.position.z + _v2.z * 34;
+    aimSun(fx2, groundH(fx2, fz2), fz2);
+  }
+  // hole HUD minimap: EVENT-driven redraw only (aim/club/ball/turn changes)
+  if (MAPS.dirty) redrawMap();
 }
 
 function updateCamera(dt) {
@@ -688,14 +701,46 @@ function updateCamera(dt) {
     }
     case 'trans': break;
     case 'flyover': {
-      const t = smoothstep(clamp(flyT, 0, 1));
-      const pos = flyCurve.getPoint(t);
-      const look = flyLook.getPoint(smoothstep(clamp(flyT * 1.05, 0, 1)));
-      const sway = LOWFX ? 0 : Math.sin(visT * 1.7) * 0.35 * (1 - t);
-      camera.position.set(pos.x, pos.y + sway, pos.z);
-      camera.lookAt(look);
+      // one continuous eased shot: cup → tee along the centerline, at gentle
+      // height, looking ahead down the hole; the last stretch blends into the
+      // exact address camera pose.  (Same path under LOWFX — one camera.)
+      const e = smoothstep(clamp(flyT, 0, 1));
+      const acp = FLY.acp;
+      const d = lerp(FLY.dStart, FLY.dEnd, e);
+      const w = clWorld(CUR, d, 0);
+      const py0 = groundH(w[0], w[1]) + lerp(27, 10, e);
+      const blend = smoothstep(clamp((e - 0.78) / 0.22, 0, 1));
+      const px = lerp(w[0], acp[0], blend), py = lerp(py0, acp[1], blend), pz = lerp(w[1], acp[2], blend);
+      // look: tee-ward down the hole while flying; the last stretch sweeps
+      // the YAW around into the address orientation (an angular turn — a
+      // linear look-point blend passes through the nadir and looks straight
+      // down for a beat, measured -81°)
+      const ld = d - lerp(66, 46, e);   // opening beat: the green centered in frame
+      const lw = clWorld(CUR, ld, 0);
+      const ly0 = groundH(lw[0], lw[1]) + lerp(2.0, 2.4, e);
+      const yawPath = Math.atan2(lw[0] - px, lw[1] - pz);
+      const pitPath = Math.atan2(ly0 - py, Math.hypot(lw[0] - px, lw[1] - pz) || 1e-6);
+      const yawAdr = Math.atan2(acp[3] - acp[0], acp[5] - acp[2]);
+      const pitAdr = Math.atan2(acp[4] - acp[1], Math.hypot(acp[3] - acp[0], acp[5] - acp[2]) || 1e-6);
+      const yaw = angLerp(yawPath, yawAdr, blend);
+      const pit = lerp(pitPath, pitAdr, blend);
+      const lx = px + Math.sin(yaw) * Math.cos(pit) * 30;
+      const lz = pz + Math.cos(yaw) * Math.cos(pit) * 30;
+      const lyy = py + Math.sin(pit) * 30;
+      camera.position.set(px, py, pz);
+      _v1.set(lx, lyy, lz);
+      camera.lookAt(_v1);
       CAMR.ready = false;
       setFov(50);
+      if (flyRec) {   // choreography witness (look-verify asserts on this)
+        const dxz = Math.hypot(lx - px, lz - pz) || 1e-6;
+        const pitch = Math.atan2(lyy - py, dxz) * 180 / Math.PI;
+        if (pitch < flyRec.minPitch) flyRec.minPitch = pitch;
+        if (d > flyRec.lastD + 0.01) flyRec.mono = false;
+        flyRec.lastD = d;
+        flyRec.endPos = [px, py, pz];
+        flyRec.n++;
+      }
       break;
     }
     case 'address': case 'meter': case 'swing': case 'card': case 'roundend': {
@@ -766,7 +811,17 @@ function frame(now) {
   }
   const dtVis = Math.max(dtReal, n * DT);
   updateVisuals(dtVis, now);
-  renderer.render(scene, camera);
+  // FC-LOOK-1 render path: scene → RT → ONE graded quad.  info.autoReset is
+  // off, so TL counts the WHOLE frame (shadow pass + scene + post).
+  renderer.info.reset();
+  if (LOOK && FX.post) {
+    renderer.setRenderTarget(lookRT);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    renderer.render(postScene, postCam);
+  } else {
+    renderer.render(scene, camera);
+  }
   TL.calls = renderer.info.render.calls;
   TL.tris = renderer.info.render.triangles;
   fpsAcc += dtReal; fpsN++;
@@ -820,6 +875,13 @@ window.__fc = {
     buildHole(11);
     return out;
   },
+  // ── FC-LOOK-1 hooks ──
+  flyDur: FLY_DUR,
+  flyRec: () => (flyRec ? { minPitch: flyRec.minPitch, mono: flyRec.mono, endPos: flyRec.endPos, n: flyRec.n } : null),
+  camPos: () => [camera.position.x, camera.position.y, camera.position.z],
+  mapDraws: () => MAPS.draws,
+  mapMarker: () => MAPS.marker.slice(),
+  look: () => ({ look: LOOK, shadow: FX.shadow, post: FX.post, msaa: FX.msaa, casterTris: casterTris() }),
 };
 
 /* ── boot ── */

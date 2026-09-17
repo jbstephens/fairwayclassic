@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-2-AIM';
+const BUILD_TAG = 'FC-3-LOOK';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -18,6 +18,9 @@ try {
   else if (QS.get('fx') === 'full') { localStorage.setItem('arcade_lowfx', '0'); }
   else { LOWFX = localStorage.getItem('arcade_lowfx') === '1'; }
 } catch (e) { LOWFX = false; }
+/* FC-LOOK-1: the lit/graded pipeline is the default; ?look=0 is the escape
+   hatch back to the v1 flat pipeline (MeshBasic, no shadow map, no post). */
+const LOOK = QS.get('look') !== '0';
 // ?turbo=N (testing only): N real sim ticks per rAF — same sim, same inputs.
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
@@ -124,7 +127,7 @@ const HOLES = [
   { n: 3, name: 'Flowering Peach', par: 4, yds: 350, bend: [], fw: 14,
     elv: [[0, 0], [0.6, 0.8], [1, 2.5]],
     bunkers: [[238, -20, 10, 8], [252, -24, 9, 7], [266, -19, 9, 7], [280, -24, 8, 6]],
-    water: [], green: { r: 9, sx: 0.014, sz: 0.02 }, tclump: [] },
+    water: [], green: { r: 9, sx: 0.014, sz: 0.02 }, peach: true, tclump: [] },
   { n: 4, name: 'Flowering Crab', par: 3, yds: 240, bend: [], fw: 9,
     elv: [[0, 0], [1, -1.5]],
     bunkers: [[218, 13, 10, 8], [226, -15, 9, 8]], water: [],
@@ -132,7 +135,7 @@ const HOLES = [
   { n: 5, name: 'Magnolia', par: 4, yds: 495, bend: [[0.5, -18]], fw: 15,
     elv: [[0, 0], [0.5, 2], [1, 6]],
     bunkers: [[300, -20, 14, 9], [318, -22, 12, 8]], water: [],
-    green: { r: 12, sx: 0.012, sz: -0.02 }, tclump: [[265, -36, 26, 14]] },
+    green: { r: 12, sx: 0.012, sz: -0.02 }, magnolia: true, tclump: [[265, -36, 26, 14]] },
   { n: 6, name: 'Juniper', par: 3, yds: 180, bend: [], fw: 8,
     elv: [[0, 0], [0.2, -1], [1, -8]],
     bunkers: [[164, 14, 11, 8]], water: [],
@@ -140,7 +143,7 @@ const HOLES = [
   { n: 7, name: 'Pampas', par: 4, yds: 450, bend: [], fw: 11,
     elv: [[0, 0], [1, 1.5]],
     bunkers: [[418, -10, 9, 7], [424, 0, 9, 7], [418, 10, 9, 7]], water: [],
-    green: { r: 10, sx: 0.01, sz: 0.022 }, chute: true, tclump: [] },
+    green: { r: 10, sx: 0.01, sz: 0.022 }, chute: true, pampas: true, tclump: [] },
   { n: 8, name: 'Yellow Jasmine', par: 5, yds: 570, bend: [[0.6, 10]], fw: 16,
     elv: [[0, 0], [0.4, 3], [1, 10]],
     bunkers: [[275, 20, 14, 10]], water: [],
@@ -152,7 +155,7 @@ const HOLES = [
   { n: 10, name: 'Camellia', par: 4, yds: 495, bend: [[0.4, -22]], fw: 16,
     elv: [[0, 0], [0.5, -9], [1, -16]],
     bunkers: [[330, 18, 13, 9]], water: [],
-    green: { r: 13, sx: -0.016, sz: 0.014 }, tclump: [[230, -38, 28, 16]] },
+    green: { r: 13, sx: -0.016, sz: 0.014 }, camellia: true, tclump: [[230, -38, 28, 16]] },
   { n: 11, name: 'White Dogwood', par: 4, yds: 520, bend: [[0.5, -8]], fw: 16,
     elv: [[0, 0], [0.4, -4], [1, -10]],
     bunkers: [],
@@ -183,7 +186,7 @@ const HOLES = [
     elv: [[0, 0], [1, -2.5]],
     bunkers: [[152, 16, 10, 7], [172, -16, 9, 7]],
     water: [{ t: 'pond', d: 95, off: -6, rx: 34, rz: 50 }],
-    green: { r: 13, sx: -0.03, sz: 0.008 }, tclump: [[120, 34, 22, 10]] },
+    green: { r: 13, sx: -0.03, sz: 0.008 }, redbud: true, tclump: [[120, 34, 22, 10]] },
   { n: 17, name: 'Nandina', par: 4, yds: 440, bend: [], fw: 14,
     elv: [[0, 0], [1, 2.5]],
     bunkers: [[412, -14, 10, 8], [416, 14, 10, 8]], water: [],
@@ -191,7 +194,7 @@ const HOLES = [
   { n: 18, name: 'Holly', par: 4, yds: 465, bend: [[0.55, 26]], fw: 14,
     elv: [[0, 0], [0.55, 2], [1, 7]],
     bunkers: [[252, 16, 11, 8], [268, 20, 10, 7], [438, -13, 9, 7], [452, 12, 9, 7]],
-    water: [], green: { r: 12, sx: -0.014, sz: -0.018 },
+    water: [], green: { r: 12, sx: -0.014, sz: -0.018 }, gallery: true,
     tclump: [[260, 44, 26, 16]] },
 ];
 

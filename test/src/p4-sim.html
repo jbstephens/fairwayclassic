@@ -316,5 +316,6 @@ function simulateArc(p) {
     ringMesh.visible = true;
   } else ringMesh.visible = false;
   SHOT.arcDirty = false;
+  MAPS.dirty = true;   // hole HUD: aim/club changed → the minimap overlay redraws once
 }
 </script>
