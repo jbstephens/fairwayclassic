@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fairway Classic</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fairway Classic">
+<script src="https://ses.q5labs.co/lib/controller.js"></script>
+<style>
+/* FAIRWAY CLASSIC — Stephens Arcade. 1280x720 fixed stage, CSS letterbox.
+   HOUSE LAW: no backdrop-filter anywhere; flat rgba panels only. */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden; background: #071a0e;
+  font-family: "Avenir Next", "Trebuchet MS", Verdana, sans-serif;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; touch-action: none;
+}
+#stage {
+  position: absolute; left: 50%; top: 50%; width: 1280px; height: 720px;
+  transform: translate(-50%, -50%); overflow: hidden; background: #071a0e;
+}
+#gl { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: block; }
+#vignette {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    rgba(0,0,0,0) 55%, rgba(4,14,8,0.22) 82%, rgba(3,10,6,0.5) 100%);
+}
+.serif { font-family: Georgia, "Times New Roman", serif; }
+
+/* ── HUD ─────────────────────────────────────────────────────────── */
+#hud { position: absolute; inset: 0; pointer-events: none; display: none; }
+.panel {
+  position: absolute; background: rgba(6, 26, 14, 0.72); color: #f2efe2;
+  border: 2px solid rgba(240, 228, 180, 0.28); border-radius: 10px;
+  padding: 8px 16px; line-height: 1.25;
+}
+#holeInfo { left: 18px; top: 14px; font-size: 24px; letter-spacing: 0.4px; }
+#holeInfo b { color: #ffd75e; font-weight: 700; }
+#holeInfo .hn { font-family: Georgia, serif; font-style: italic; color: #cfe8c8; }
+#windBox { right: 18px; top: 14px; font-size: 24px; text-align: center; min-width: 118px; }
+#windArrow { display: inline-block; font-size: 30px; color: #9fdcff; transform-origin: 50% 50%; }
+#windTxt { color: #d8f0ff; }
+#shotInfo { left: 18px; bottom: 16px; font-size: 25px; }
+#shotInfo .ptag { font-weight: 800; letter-spacing: 1px; }
+#shotInfo .p1c { color: #ff8f7a; } #shotInfo .p2c { color: #7ab8ff; }
+#shotInfo .dist { color: #ffd75e; font-weight: 700; }
+#clubBox { right: 18px; bottom: 16px; font-size: 25px; text-align: center; min-width: 170px; }
+#clubName { font-weight: 800; font-size: 30px; color: #ffd75e; letter-spacing: 1px; }
+#clubCarry { color: #cfe8c8; font-size: 21px; }
+#clubHint { color: #9db89a; font-size: 15px; letter-spacing: 1px; }
+/* when the injected touch overlay is up, lift the corner panels clear of
+   the virtual stick / face buttons (class set on overlay detection) */
+body.tp-on #clubBox { bottom: 158px; }
+body.tp-on #shotInfo { bottom: 158px; }
+
+/* power meter — flat zones, chunky, couch-legible */
+#meterWrap {
+  position: absolute; left: 50%; bottom: 76px; transform: translateX(-50%);
+  width: 480px; display: none;
+}
+#meterBar {
+  position: relative; height: 34px; border-radius: 8px; overflow: hidden;
+  border: 3px solid rgba(240, 228, 180, 0.55); background: #14351d;
+}
+#meterZones { position: absolute; inset: 0;
+  background: linear-gradient(90deg, #235c31 0 60%, #7a8a2c 60% 85%, #a8402a 85% 100%);
+  opacity: 0.85; }
+#meterFill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+  background: linear-gradient(180deg, #ffe98c, #ffc93c); opacity: 0.96;
+}
+#meterPct {
+  position: absolute; right: -92px; top: 1px; width: 84px; text-align: left;
+  font-size: 27px; font-weight: 800; color: #ffe98c; text-shadow: 0 2px 0 rgba(0,0,0,0.5);
+}
+/* center banner */
+#banner {
+  position: absolute; left: 0; right: 0; top: 24%; text-align: center;
+  pointer-events: none; display: none;
+}
+#bannerMain {
+  font-family: Georgia, serif; font-size: 58px; font-weight: 700; color: #ffe98c;
+  text-shadow: 0 3px 0 rgba(10, 30, 15, 0.85), 0 0 22px rgba(0,0,0,0.35);
+  letter-spacing: 2px;
+}
+#bannerSub {
+  margin-top: 8px; font-size: 27px; color: #f2efe2;
+  text-shadow: 0 2px 0 rgba(10, 30, 15, 0.85);
+}
+#hintLine {
+  position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+  font-size: 18px; color: rgba(240, 235, 210, 0.85); letter-spacing: 1px;
+  text-shadow: 0 2px 0 rgba(0,0,0,0.5); white-space: nowrap; display: none;
+}
+
+/* ── full-screen overlays ────────────────────────────────────────── */
+.screen { position: absolute; inset: 0; display: none; }
+#titleUI { text-align: center; }
+#titleCrest { margin-top: 92px; font-size: 26px; color: #ffd75e; letter-spacing: 8px; }
+#titleMain {
+  font-family: Georgia, "Times New Roman", serif; font-size: 96px; font-weight: 700;
+  color: #fff7dd; letter-spacing: 4px; line-height: 1.02; margin-top: 6px;
+  text-shadow: 0 4px 0 rgba(8, 28, 14, 0.9), 0 0 34px rgba(0, 0, 0, 0.4);
+}
+#titleSub {
+  font-family: Georgia, serif; font-style: italic; font-size: 27px; color: #cfe8c8;
+  margin-top: 4px; text-shadow: 0 2px 0 rgba(8, 28, 14, 0.9);
+}
+#titlePress { margin-top: 70px; font-size: 32px; font-weight: 800; color: #ffe98c;
+  letter-spacing: 2px; text-shadow: 0 2px 0 rgba(0,0,0,0.6); }
+#titleJoin { margin-top: 12px; font-size: 22px; color: #bcd8ff; letter-spacing: 1px;
+  text-shadow: 0 2px 0 rgba(0,0,0,0.6); }
+#titleBest { margin-top: 26px; font-size: 20px; color: #e8dfba; letter-spacing: 1px;
+  text-shadow: 0 2px 0 rgba(0,0,0,0.6); }
+.blink { animation: blinkA 1.2s steps(2, jump-none) infinite; }
+@keyframes blinkA { 50% { opacity: 0.25; } }
+
+#menuUI { text-align: center; }
+#menuTitle { margin-top: 168px; font-family: Georgia, serif; font-size: 46px;
+  color: #fff7dd; letter-spacing: 3px; text-shadow: 0 3px 0 rgba(8,28,14,0.9); }
+#menuOpts { margin-top: 44px; }
+.mopt {
+  display: block; margin: 14px auto; width: 420px; padding: 12px 0;
+  font-size: 33px; font-weight: 800; letter-spacing: 3px; color: #e6e2cc;
+  background: rgba(6, 26, 14, 0.66); border: 3px solid rgba(240,228,180,0.25);
+  border-radius: 12px;
+}
+.mopt.sel { color: #1c3a12; background: #ffe98c; border-color: #fff7dd; }
+.mopt .sub { display: block; font-size: 17px; font-weight: 400; letter-spacing: 1px; margin-top: 2px; }
+#menuHint { margin-top: 30px; font-size: 19px; color: rgba(240,235,210,0.8); letter-spacing: 1px; }
+
+/* scorecard */
+#cardUI { text-align: center; }
+#cardBox {
+  display: inline-block; margin-top: 74px; padding: 22px 30px 18px;
+  background: rgba(5, 22, 12, 0.88); border: 3px solid rgba(240,228,180,0.4);
+  border-radius: 14px; color: #f2efe2;
+}
+#cardTitle { font-family: Georgia, serif; font-size: 38px; color: #fff7dd; letter-spacing: 2px; }
+#cardWord { font-family: Georgia, serif; font-size: 52px; color: #ffe98c; margin: 6px 0 10px; }
+#cardTable { border-collapse: collapse; margin: 8px auto; }
+#cardTable td, #cardTable th {
+  border: 1px solid rgba(240,228,180,0.25); padding: 5px 0; text-align: center;
+  font-size: 19px; min-width: 42px;
+}
+#cardTable th { color: #ffd75e; font-weight: 700; background: rgba(255, 215, 94, 0.08); }
+#cardTable td.tot { color: #ffe98c; font-weight: 800; min-width: 58px; }
+.p1c { color: #ff8f7a; } .p2c { color: #7ab8ff; }
+#cardTable td.birdie { color: #ff9d8a; font-weight: 800; }
+#cardTable td.eagle { color: #ffce6b; font-weight: 800; }
+#cardTable td.over { color: #9fc4ff; }
+#cardVs { font-size: 27px; color: #cfe8c8; margin-top: 6px; }
+#cardHint { margin-top: 16px; font-size: 19px; color: rgba(240,235,210,0.85); letter-spacing: 1px; }
+
+/* pause */
+#pauseUI { text-align: center; background: rgba(3, 12, 7, 0.68); }
+#pauseTitle { margin-top: 178px; font-family: Georgia, serif; font-size: 54px;
+  color: #fff7dd; letter-spacing: 4px; }
+#fadeBlack {
+  position: absolute; inset: 0; background: #05130a; opacity: 1;
+  pointer-events: none; transition: opacity 0.45s linear;
+}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl" width="1280" height="720"></canvas>
+  <div id="vignette"></div>
+  <div id="hud">
+    <div id="holeInfo" class="panel"></div>
+    <div id="windBox" class="panel"><span id="windArrow">&#10148;</span> <span id="windTxt"></span></div>
+    <div id="shotInfo" class="panel"></div>
+    <div id="clubBox" class="panel">
+      <div id="clubName"></div><div id="clubCarry"></div><div id="clubHint"></div>
+    </div>
+    <div id="meterWrap">
+      <div id="meterPct"></div>
+      <div id="meterBar"><div id="meterZones"></div><div id="meterFill"></div></div>
+    </div>
+  </div>
+  <div id="banner"><div id="bannerMain"></div><div id="bannerSub"></div></div>
+  <div id="hintLine"></div>
+  <div id="titleUI" class="screen">
+    <div id="titleCrest">&#9971; MAGNOLIA NATIONAL &#9971;</div>
+    <div id="titleMain">FAIRWAY<br>CLASSIC</div>
+    <div id="titleSub">an invitational for the whole family</div>
+    <div id="titlePress" class="blink">P1 &mdash; PRESS &#10005;</div>
+    <div id="titleJoin">P2 PRESS &#10005; TO JOIN</div>
+    <div id="titleBest"></div>
+  </div>
+  <div id="menuUI" class="screen">
+    <div id="menuTitle"></div>
+    <div id="menuOpts"></div>
+    <div id="menuHint"></div>
+  </div>
+  <div id="cardUI" class="screen">
+    <div id="cardBox">
+      <div id="cardTitle"></div>
+      <div id="cardWord"></div>
+      <table id="cardTable"></table>
+      <div id="cardVs"></div>
+      <div id="cardHint"></div>
+    </div>
+  </div>
+  <div id="pauseUI" class="screen">
+    <div id="pauseTitle">PAUSED</div>
+    <div id="menuOptsP" style="margin-top:40px"></div>
+  </div>
+  <div id="fadeBlack"></div>
+</div>

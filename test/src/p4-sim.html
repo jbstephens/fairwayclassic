@@ -1,0 +1,320 @@
+<script>
+/* ═══════════ p4 — sim: ball flight, surfaces, shot mechanics ═══════════ */
+
+let DIFF = 'amateur';        // 'amateur' | 'pro'
+const WIND = { mph: 0, dir: 0, ax: 0, az: 0 };
+function rollWind(shot) {
+  const rng = Math.random;
+  const max = DIFF === 'pro' ? 15 : 8;
+  if (!shot || WIND.unset !== false || (CUR && CUR.swirl)) {
+    WIND.mph = Math.round(rng() * max);
+    WIND.dir = rng() * TAU;
+  }
+  WIND.ax = Math.sin(WIND.dir) * WIND.mph * WIND_K;
+  WIND.az = Math.cos(WIND.dir) * WIND.mph * WIND_K;
+  WIND.unset = false;
+}
+
+/* lie multipliers (design): rough 70% power + wider spread, bunker 55% must
+   loft out, fairway/tee/fringe normal */
+function lieMul(lie) { return lie === 0 ? 0.7 : lie === 4 ? 0.55 : 1.0; }
+
+const SHOT = {
+  aimAng: 0, club: 0, putter: false,
+  power: 0, meterV: 0, meterDir: 1,
+  arcDirty: true, landX: 0, landZ: 0, puttMax: 20,
+};
+function meterSpeed() { return DIFF === 'pro' ? 130 : 92; }   // pct per second
+
+function distToPin(x, z) { return Math.hypot(PIN.x - x, PIN.z - z); }
+
+/* club auto-suggest by distance remaining (rough/sand penalty considered) */
+function suggestClub(p) {
+  if (p.lie === 2) { SHOT.putter = true; SHOT.club = 0; return; }
+  SHOT.putter = false;
+  const d = distToPin(p.ball.x, p.ball.z) / lieMul(p.lie);
+  // shortest club that still carries the distance; too far for anything = DR
+  let best = 0;
+  for (let i = CLUBS.length - 1; i >= 0; i--) {
+    if (CLUBS[i].carry >= d - 4) { best = i; break; }
+  }
+  // bunker: must loft out — never less loft than 9i
+  if (p.lie === 4) best = Math.max(best, 8);
+  SHOT.club = best;
+  SHOT.arcDirty = true;
+}
+function aimAtPin(p) {
+  // default aim: at the pin when it's reachable, else down the fairway
+  // (the centerline point one carry away) so doglegs suggest the smart line
+  const d = distToPin(p.ball.x, p.ball.z);
+  let tx = PIN.x, tz = PIN.z;
+  if (!SHOT.putter) {
+    const reach = CLUBS[SHOT.club].carry * lieMul(p.lie);
+    if (d > reach + 18) {
+      const dof = clDoff(CUR, p.ball.x, p.ball.z);
+      const w = clWorld(CUR, Math.min(dof[0] + reach, CUR.len - 14), 0);
+      tx = w[0]; tz = w[1];
+    }
+  }
+  SHOT.aimAng = Math.atan2(tx - p.ball.x, tz - p.ball.z);
+  SHOT.arcDirty = true;
+}
+
+/* ── ball flight state ── */
+const FLIGHT = {
+  on: false, mode: 'fly', x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
+  t: 0, treeCool: 0, peakY: 0, power: 0,
+  path: new Float32Array(3 * 1200), pathN: 0,
+};
+function pathPush(x, y, z) {
+  if (FLIGHT.pathN >= 1200) return;
+  const i = FLIGHT.pathN * 3;
+  FLIGHT.path[i] = x; FLIGHT.path[i + 1] = y; FLIGHT.path[i + 2] = z;
+  FLIGHT.pathN++;
+}
+
+function launchShot(p, power) {
+  const c = CLUBS[SHOT.club];
+  const mul = lieMul(p.lie);
+  const carry = Math.max(3, c.carry * mul * power);
+  const loft = c.loft * Math.PI / 180;
+  const v = Math.sqrt(carry * GRAV / Math.sin(2 * loft));
+  let ang = SHOT.aimAng;
+  if (DIFF === 'pro') ang += (Math.random() - 0.5) * 2 * (power * power) * 0.05;   // ~±2.9 deg at full power
+  if (p.lie === 0) ang += (Math.random() - 0.5) * 0.05;
+  if (p.lie === 4) ang += (Math.random() - 0.5) * 0.07;
+  FLIGHT.on = true; FLIGHT.mode = 'fly'; FLIGHT.t = 0; FLIGHT.treeCool = 0; FLIGHT.touches = 0;
+  FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y + 0.2; FLIGHT.z = p.ball.z;
+  const ch = Math.cos(loft) * v;
+  FLIGHT.vx = Math.sin(ang) * ch;
+  FLIGHT.vz = Math.cos(ang) * ch;
+  FLIGHT.vy = Math.sin(loft) * v;
+  FLIGHT.peakY = FLIGHT.y;
+  FLIGHT.pathN = 0; FLIGHT.power = power;
+  pathPush(FLIGHT.x, FLIGHT.y, FLIGHT.z);
+  if (p.lie === 4) { SFX.sand(); burst(psSand, FLIGHT.x, FLIGHT.y, FLIGHT.z, 14, 1.2, 1.1); }
+}
+function launchPutt(p, power) {
+  const rollDist = Math.max(0.8, SHOT.puttMax * power);
+  const mu = greenMu();
+  const v0 = Math.sqrt(2 * mu * rollDist);
+  FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0;
+  FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y; FLIGHT.z = p.ball.z;
+  FLIGHT.vx = Math.sin(SHOT.aimAng) * v0;
+  FLIGHT.vz = Math.cos(SHOT.aimAng) * v0;
+  FLIGHT.vy = 0;
+  FLIGHT.pathN = 0; FLIGHT.power = power;
+}
+function greenMu() { return DIFF === 'pro' ? 0.92 : 1.12; }
+function surfMu(s) {
+  switch (s) {
+    case 2: return greenMu();
+    case 3: return 2.0;
+    case 1: case 6: return 2.6;
+    case 4: return 9.0;
+    default: return 6.5;
+  }
+}
+
+/* one sim tick of the live ball.  Returns null or an event object. */
+const _gr = [0, 0];
+function ballGrad(x, z, out) {
+  out[0] = (groundH(x + 0.6, z) - groundH(x - 0.6, z)) / 1.2;
+  out[1] = (groundH(x, z + 0.6) - groundH(x, z - 0.6)) / 1.2;
+  return out;
+}
+function tickBall() {
+  if (!FLIGHT.on) return null;
+  FLIGHT.t += DT;
+  if (FLIGHT.mode === 'fly') {
+    FLIGHT.vy -= GRAV * DT;
+    FLIGHT.vx += WIND.ax * DT;
+    FLIGHT.vz += WIND.az * DT;
+    FLIGHT.x += FLIGHT.vx * DT;
+    FLIGHT.y += FLIGHT.vy * DT;
+    FLIGHT.z += FLIGHT.vz * DT;
+    FLIGHT.peakY = Math.max(FLIGHT.peakY, FLIGHT.y);
+    if ((FLIGHT.pathN === 0) || FLIGHT.t % (DT * 3) < DT) pathPush(FLIGHT.x, FLIGHT.y, FLIGHT.z);
+    // tree canopies knock the ball down
+    if (FLIGHT.treeCool > 0) FLIGHT.treeCool -= DT;
+    else {
+      for (let i = 0; i < TREES.length; i++) {
+        const t = TREES[i];
+        const dx = FLIGHT.x - t.x, dz = FLIGHT.z - t.z;
+        if (dx * dx + dz * dz > t.cr * t.cr) continue;
+        if (FLIGHT.y < t.cy0 || FLIGHT.y > t.cy1) continue;
+        SFX.rustle();
+        FLIGHT.vx *= 0.22; FLIGHT.vz *= 0.22;
+        FLIGHT.vy = Math.min(FLIGHT.vy, -3);
+        FLIGHT.treeCool = 0.5;
+        return { ev: 'tree' };
+      }
+    }
+    const g = groundH(FLIGHT.x, FLIGHT.z);
+    if (FLIGHT.y <= g && FLIGHT.vy < 0) {
+      FLIGHT.y = g;
+      const s = surfAt(FLIGHT.x, FLIGHT.z);
+      if (s === 5) return waterIn();
+      const speed = Math.hypot(FLIGHT.vx, FLIGHT.vz);
+      if (s === 4) {   // plugs in sand
+        SFX.sand();
+        burst(psSand, FLIGHT.x, g + 0.2, FLIGHT.z, 16, 1.4, 1.2);
+        FLIGHT.vx *= 0.12; FLIGHT.vz *= 0.12; FLIGHT.vy = 0;
+        FLIGHT.mode = 'roll';
+        return { ev: 'landed', surf: s };
+      }
+      // no-drag ballistics land hot: the touch factors do the drag's job.
+      // keep = horizontal speed surviving a touch (backspin-ish on greens).
+      FLIGHT.touches = (FLIGHT.touches || 0) + 1;
+      const keep = s === 2 ? (DIFF === 'pro' ? 0.17 : 0.11)
+                 : s === 3 ? 0.18 : s === 0 ? 0.12 : 0.28;
+      FLIGHT.vx *= keep; FLIGHT.vz *= keep;
+      FLIGHT.vy = Math.min(3.5, -FLIGHT.vy * 0.25);
+      if (FLIGHT.vy < 1.2 || FLIGHT.touches >= 2) {
+        FLIGHT.vy = 0; FLIGHT.mode = 'roll';
+        return { ev: 'landed', surf: s };
+      }
+      SFX.bounce();
+      return { ev: 'bounce', surf: s };
+    }
+    if (FLIGHT.t > 30) { FLIGHT.on = false; return { ev: 'stopped' }; }   // failsafe
+    return null;
+  }
+  // rolling
+  const g = groundH(FLIGHT.x, FLIGHT.z);
+  FLIGHT.y = g;
+  const s = surfAt(FLIGHT.x, FLIGHT.z);
+  if (s === 5) return waterIn();
+  ballGrad(FLIGHT.x, FLIGHT.z, _gr);
+  const slopeK = s === 2 ? 10.5 : 5.0;
+  FLIGHT.vx -= _gr[0] * slopeK * DT;
+  FLIGHT.vz -= _gr[1] * slopeK * DT;
+  const sp = Math.hypot(FLIGHT.vx, FLIGHT.vz);
+  const mu = surfMu(s);
+  if (sp > 0.0001) {
+    const dec = Math.min(sp, mu * DT * (1 + sp * 0.06));
+    FLIGHT.vx -= FLIGHT.vx / sp * dec;
+    FLIGHT.vz -= FLIGHT.vz / sp * dec;
+  }
+  FLIGHT.x += FLIGHT.vx * DT;
+  FLIGHT.z += FLIGHT.vz * DT;
+  if (FLIGHT.pathN === 0 || (FLIGHT.t * 60 | 0) % 3 === 0) pathPush(FLIGHT.x, FLIGHT.y, FLIGHT.z);
+  // the cup
+  const dPin = distToPin(FLIGHT.x, FLIGHT.z);
+  const sp2 = Math.hypot(FLIGHT.vx, FLIGHT.vz);
+  if (dPin < 0.42) {
+    if (sp2 < 5.4) { FLIGHT.on = false; return { ev: 'holed' }; }
+    // lip out: deflect
+    const nx = (FLIGHT.x - PIN.x) / (dPin || 1), nz = (FLIGHT.z - PIN.z) / (dPin || 1);
+    const dot = FLIGHT.vx * nx + FLIGHT.vz * nz;
+    FLIGHT.vx -= 1.6 * dot * nx; FLIGHT.vz -= 1.6 * dot * nz;
+    FLIGHT.vx *= 0.55; FLIGHT.vz *= 0.55;
+    SFX.bounce();
+  }
+  if (sp2 < 0.32) {
+    FLIGHT.on = false;
+    return { ev: 'stopped', surf: s };
+  }
+  return null;
+}
+
+/* water: splash + rewind along the recorded path for the drop */
+function waterIn() {
+  SFX.splash(); SFX.plunk();
+  burst(psSplash, FLIGHT.x, FLIGHT.y + 0.3, FLIGHT.z, 22, 1.6, 1.5);
+  const ex = FLIGHT.x, ez = FLIGHT.z;
+  const dPinEntry = distToPin(ex, ez);
+  let dropX = null, dropZ = null;
+  for (let i = FLIGHT.pathN - 1; i >= 0; i--) {
+    const x = FLIGHT.path[i * 3], z = FLIGHT.path[i * 3 + 2];
+    const s = surfAt(x, z);
+    if (s === 5 || s === 4) continue;
+    if (DIFF === 'pro' && distToPin(x, z) < dPinEntry - 0.5) continue;   // proper drop: no closer to the hole
+    dropX = x; dropZ = z;
+    break;
+  }
+  FLIGHT.on = false;
+  return { ev: 'water', ex, ez, dropX, dropZ };
+}
+
+/* ── the aim preview (arc for clubs, line/curve for putts) ── */
+function simulateArc(p) {
+  const n = ARC_N;
+  let land = null;
+  if (!SHOT.putter) {
+    const c = CLUBS[SHOT.club];
+    const mul = lieMul(p.lie);
+    const carry = Math.max(3, c.carry * mul);
+    const loft = c.loft * Math.PI / 180;
+    const v = Math.sqrt(carry * GRAV / Math.sin(2 * loft));
+    let x = p.ball.x, y = p.ball.y + 0.2, z = p.ball.z;
+    let vx = Math.sin(SHOT.aimAng) * Math.cos(loft) * v;
+    let vz = Math.cos(SHOT.aimAng) * Math.cos(loft) * v;
+    let vy = Math.sin(loft) * v;
+    const dt = 1 / 30;
+    const samples = [];
+    for (let i = 0; i < 400; i++) {
+      vy -= GRAV * dt; vx += WIND.ax * dt; vz += WIND.az * dt;
+      x += vx * dt; y += vy * dt; z += vz * dt;
+      samples.push(x, y, z);
+      if (vy < 0 && y <= groundH(x, z)) { land = [x, groundH(x, z), z]; break; }
+    }
+    const m = samples.length / 3;
+    for (let i = 0; i < n; i++) {
+      const si = Math.min(m - 1, Math.floor(i * m / n));
+      arcPos[i * 3] = samples[si * 3];
+      arcPos[i * 3 + 1] = samples[si * 3 + 1] + 0.1;
+      arcPos[i * 3 + 2] = samples[si * 3 + 2];
+    }
+  } else {
+    // putt: Amateur = curved roll preview; Pro = straight line
+    const dPin = distToPin(p.ball.x, p.ball.z);
+    SHOT.puttMax = clamp(dPin * 2.5, 6, 90);
+    const lineLen = Math.min(dPin * 1.15, SHOT.puttMax);
+    if (DIFF === 'amateur') {
+      const mu = greenMu();
+      let v0 = Math.sqrt(2 * mu * lineLen);
+      let x = p.ball.x, z = p.ball.z;
+      let vx = Math.sin(SHOT.aimAng) * v0, vz = Math.cos(SHOT.aimAng) * v0;
+      const dt = 1 / 30;
+      const samples = [];
+      for (let i = 0; i < 300; i++) {
+        ballGrad(x, z, _gr);
+        vx -= _gr[0] * 10.5 * dt; vz -= _gr[1] * 10.5 * dt;
+        const sp = Math.hypot(vx, vz);
+        if (sp < 0.3) break;
+        const dec = Math.min(sp, surfMu(surfAt(x, z)) * dt * (1 + sp * 0.06));
+        vx -= vx / sp * dec; vz -= vz / sp * dec;
+        x += vx * dt; z += vz * dt;
+        samples.push(x, groundH(x, z), z);
+      }
+      const m = Math.max(1, samples.length / 3);
+      for (let i = 0; i < n; i++) {
+        const si = Math.min(m - 1, Math.floor(i * m / n));
+        arcPos[i * 3] = samples[si * 3] !== undefined ? samples[si * 3] : p.ball.x;
+        arcPos[i * 3 + 1] = (samples[si * 3 + 1] || p.ball.y) + 0.12;
+        arcPos[i * 3 + 2] = samples[si * 3 + 2] !== undefined ? samples[si * 3 + 2] : p.ball.z;
+      }
+      const li = (m - 1) * 3;
+      land = samples.length ? [samples[li], samples[li + 1], samples[li + 2]] : null;
+    } else {
+      for (let i = 0; i < n; i++) {
+        const d = lineLen * (i + 1) / n;
+        const x = p.ball.x + Math.sin(SHOT.aimAng) * d;
+        const z = p.ball.z + Math.cos(SHOT.aimAng) * d;
+        arcPos[i * 3] = x; arcPos[i * 3 + 1] = groundH(x, z) + 0.12; arcPos[i * 3 + 2] = z;
+      }
+      const x = p.ball.x + Math.sin(SHOT.aimAng) * lineLen;
+      const z = p.ball.z + Math.cos(SHOT.aimAng) * lineLen;
+      land = [x, groundH(x, z), z];
+    }
+  }
+  arcGeo.attributes.position.needsUpdate = true;
+  if (land) {
+    SHOT.landX = land[0]; SHOT.landZ = land[2];
+    ringMesh.position.set(land[0], land[1] + 0.12, land[2]);
+    ringMesh.visible = true;
+  } else ringMesh.visible = false;
+  SHOT.arcDirty = false;
+}
+</script>

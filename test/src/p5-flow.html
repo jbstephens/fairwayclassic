@@ -1,0 +1,836 @@
+<script>
+/* ═══════════ p5 — flow: states, cameras, HUD, the round ═══════════ */
+
+let simTick = 0;
+const ROUND = { holes: [], idx: 0, label: '' };
+let flyT = 0, flyCurve = null, flyLook = null, flySkipOk = false;
+let swingT = 0, swingPower = 0, settleT = 0, bannerT = 0;
+let replayT = 0, replayActive = false;
+let peekOn = false, greadOn = false;
+let menuSel = 0, pauseSel = 0;
+let celebrating = 0, flagBoost = 0;
+let holeStartHonors = 0;
+
+function mkPlayer(i) {
+  return {
+    i, name: 'P' + (i + 1), colorCls: i === 0 ? 'p1c' : 'p2c',
+    scores: {}, strokes: 0, holed: false, teed: false,
+    ball: { x: 0, y: 0, z: 0 }, lie: 6,
+  };
+}
+
+/* ── camera rig ── */
+const CAMR = { x: 0, y: 6, z: -10, tx: 0, ty: 0, tz: 30, ready: false, fov: 50, direct: false };
+function camSnap() { CAMR.ready = false; }
+function camGoal(ex, ey, ez, tx, ty, tz, k, dt) {
+  if (!CAMR.ready) {
+    CAMR.x = ex; CAMR.y = ey; CAMR.z = ez; CAMR.tx = tx; CAMR.ty = ty; CAMR.tz = tz;
+    CAMR.ready = true;
+  } else {
+    const f = Math.min(1, dt * k);
+    CAMR.x += (ex - CAMR.x) * f; CAMR.y += (ey - CAMR.y) * f; CAMR.z += (ez - CAMR.z) * f;
+    CAMR.tx += (tx - CAMR.tx) * f; CAMR.ty += (ty - CAMR.ty) * f; CAMR.tz += (tz - CAMR.tz) * f;
+  }
+  camera.position.set(CAMR.x, CAMR.y, CAMR.z);
+  _v1.set(CAMR.tx, CAMR.ty, CAMR.tz);
+  camera.lookAt(_v1);
+}
+function setFov(f) {
+  if (Math.abs(camera.fov - f) > 0.05) { camera.fov += (f - camera.fov) * 0.12; camera.updateProjectionMatrix(); }
+}
+
+function activeP() { return PLAYERS[turn] || PLAYERS[0]; }
+function aimDirX() { return Math.sin(SHOT.aimAng); }
+function aimDirZ() { return Math.cos(SHOT.aimAng); }
+
+/* ── banner / hint helpers ── */
+let bannerTimer = 0;
+function showBanner(main, sub, secs) {
+  bannerMainEl.textContent = main;
+  bannerSubEl.textContent = sub || '';
+  bannerEl.style.display = 'block';
+  bannerTimer = secs || 2;
+}
+function hideBanner() { bannerEl.style.display = 'none'; bannerTimer = 0; }
+function showHint(t) { hintEl.textContent = t; hintEl.style.display = t ? 'block' : 'none'; }
+
+/* ── UI screens ── */
+function showScreen(elx) {
+  for (const s of [titleUI, menuUI, cardUI, pauseUI]) s.style.display = 'none';
+  if (elx) elx.style.display = 'block';
+}
+function refreshTitle() {
+  const b = loadBest();
+  const parts = [];
+  if (b.amateur !== undefined) parts.push('BEST (AMATEUR): ' + vsParStr(b.amateur));
+  if (b.pro !== undefined) parts.push('BEST (PRO): ' + vsParStr(b.pro));
+  titleBestEl.textContent = parts.join('   ·   ');
+  titleJoinEl.textContent = PLAYERS.length > 1 ? 'P2 HAS JOINED' : 'P2 PRESS ✕ TO JOIN';
+}
+const DIFF_OPTS = [
+  ['AMATEUR', 'gentle wind · friendly drops · guided putts'],
+  ['PRO', 'strong wind · proper drops · no safety net'],
+];
+const ROUND_OPTS = [['FRONT 9', 'holes 1–9'], ['BACK 9', 'holes 10–18'], ['ALL 18', 'the full classic']];
+function showMenu(title, opts, sel) {
+  menuTitleEl.textContent = title;
+  menuOptsEl.innerHTML = opts.map((o, i) =>
+    `<span class="mopt${i === sel ? ' sel' : ''}">${o[0]}<span class="sub">${o[1]}</span></span>`).join('');
+  menuHintEl.textContent = '↑↓ CHOOSE · ✕ CONFIRM';
+  showScreen(menuUI);
+}
+
+/* ── HUD ── */
+function refreshHoleInfo() {
+  if (!CUR) return;
+  holeInfoEl.innerHTML = `<b>HOLE ${CUR.n}</b> · <span class="hn">${CUR.name}</span> · PAR ${CUR.par} · ${CUR.yds} YDS`;
+}
+function refreshShotInfo() {
+  const p = activeP();
+  const d = Math.round(distToPin(p.ball.x, p.ball.z));
+  shotInfoEl.innerHTML = `<span class="ptag ${p.colorCls}">${p.name}</span> · STROKE ${p.strokes + 1}` +
+    ` · <span class="dist">${d} YDS</span> TO PIN · ${SURF_NAMES[p.lie]}`;
+}
+function refreshClub() {
+  const p = activeP();
+  if (SHOT.putter) {
+    clubNameEl.textContent = 'PUTTER';
+    clubCarryEl.textContent = 'roll ' + Math.round(SHOT.puttMax) + ' yds max';
+  } else {
+    const c = CLUBS[SHOT.club];
+    clubNameEl.textContent = c.n;
+    clubCarryEl.textContent = Math.round(c.carry * lieMul(p.lie)) + ' yds carry';
+  }
+  clubHintEl.textContent = SHOT.putter ? '' : 'L1/R1 CLUB';
+}
+function refreshWind() {
+  windTxtEl.textContent = WIND.mph + ' MPH';
+  const deg = (WIND.dir - SHOT.aimAng) * 180 / Math.PI - 90;
+  windArrowEl.style.transform = `rotate(${deg}deg)`;
+  windArrowEl.style.opacity = WIND.mph === 0 ? 0.35 : 1;
+}
+function hudVisible(v) { hudEl.style.display = v ? 'block' : 'none'; }
+
+/* score words */
+function scoreWord(strokes, par) {
+  if (strokes === 1) return 'HOLE IN ONE!';
+  const d = strokes - par;
+  if (d <= -3) return 'ALBATROSS!';
+  if (d === -2) return 'EAGLE!';
+  if (d === -1) return 'BIRDIE!';
+  if (d === 0) return 'PAR';
+  if (d === 1) return 'BOGEY';
+  if (d === 2) return 'DOUBLE BOGEY';
+  return '+' + d;
+}
+
+/* ── scorecard ── */
+function playedVsPar(p) {
+  let v = 0;
+  for (const k in p.scores) v += p.scores[k] - HOLES[k].par;
+  return v;
+}
+function buildCard(final) {
+  const holes = ROUND.holes;
+  const w = holes.length > 9 ? 'min-width:34px' : 'min-width:46px';
+  let html = '<tr><th style="' + w + '">HOLE</th>' + holes.map(h => `<th style="${w}">${HOLES[h].n}</th>`).join('') + '<th class="tot">TOT</th></tr>';
+  html += '<tr><td>PAR</td>' + holes.map(h => `<td>${HOLES[h].par}</td>`).join('') +
+    `<td class="tot">${holes.reduce((a, h) => a + HOLES[h].par, 0)}</td></tr>`;
+  for (const p of PLAYERS) {
+    let tot = 0;
+    html += `<tr><td class="${p.colorCls}">${p.name}</td>` + holes.map(h => {
+      const s = p.scores[h];
+      if (s === undefined) return '<td>—</td>';
+      tot += s;
+      const d = s - HOLES[h].par;
+      const cls = d <= -2 ? 'eagle' : d === -1 ? 'birdie' : d > 0 ? 'over' : '';
+      return `<td class="${cls}">${s}</td>`;
+    }).join('') + `<td class="tot">${tot || '—'}</td></tr>`;
+  }
+  cardTableEl.innerHTML = html;
+  const p0 = PLAYERS[0];
+  if (PLAYERS.length === 1) {
+    cardVsEl.textContent = 'RUNNING TOTAL: ' + vsParStr(playedVsPar(p0));
+  } else {
+    cardVsEl.textContent = PLAYERS.map(p => `${p.name}: ${vsParStr(playedVsPar(p))}`).join('   ·   ');
+  }
+  if (final) {
+    cardTitleEl.textContent = 'FINAL — ' + ROUND.label + ' · ' + DIFF.toUpperCase();
+    if (PLAYERS.length > 1) {
+      const a = playedVsPar(PLAYERS[0]), b = playedVsPar(PLAYERS[1]);
+      cardWordEl.textContent = a === b ? 'ALL SQUARE!' : (a < b ? 'P1 IS THE CHAMPION!' : 'P2 IS THE CHAMPION!');
+    } else cardWordEl.textContent = 'ROUND COMPLETE';
+    cardHintEl.textContent = '✕ BACK TO TITLE';
+  } else {
+    cardTitleEl.textContent = `HOLE ${CUR.n} · ${CUR.name}`;
+    const p = PLAYERS[PLAYERS.length - 1];
+    cardWordEl.textContent = PLAYERS.map(pp => pp.scores[ROUND.holes[ROUND.idx]] !== undefined
+      ? scoreWord(pp.scores[ROUND.holes[ROUND.idx]], CUR.par) : '').filter(Boolean).join(' · ') || '—';
+    cardHintEl.textContent = '✕ NEXT HOLE' + (PLAYERS.length === 1 ? ' · START: P2 JOINS' : '');
+  }
+}
+
+/* ── round flow ── */
+function startRound(diff, holes, label) {
+  DIFF = diff;
+  ROUND.holes = holes; ROUND.idx = 0; ROUND.label = label;
+  for (const p of PLAYERS) { p.scores = {}; }
+  holeStartHonors = 0;
+  startHole();
+}
+function teePos(p) {
+  const H = CUR;
+  const w = clWorld(H, 4, (p.i === 0 ? -1.2 : 1.2));
+  return w;
+}
+let transT = 0, transNext = null;
+function beginTrans(fn) {
+  fadeBlackEl.style.opacity = 1;
+  transT = 0.5; transNext = fn;
+  state = 'trans';
+  hudVisible(false); hideBanner(); showScreen(null);
+}
+function startHole() {
+  beginTrans(() => {
+    const hi = ROUND.holes[ROUND.idx];
+    const ms = buildHole(hi);
+    console.log('[FC] hole', HOLES[hi].n, 'built in', ms.toFixed(1), 'ms');
+    WIND.unset = true;
+    rollWind(false);
+    for (const p of PLAYERS) {
+      const t = teePos(p);
+      p.ball.x = t[0]; p.ball.z = t[1]; p.ball.y = groundH(t[0], t[1]);
+      p.strokes = 0; p.holed = false; p.teed = false; p.lie = 6;
+    }
+    turn = holeStartHonors;
+    refreshHoleInfo();
+    suggestClub(PLAYERS[turn]); aimAtPin(PLAYERS[turn]);
+    refreshShotInfo(); refreshClub(); refreshWind();
+    // flyover spline: above the green, back down the hole, settle behind the tee
+    const gp = clPoint(CUR, CUR.len);
+    const mid1 = clWorld(CUR, CUR.len * 0.62, 0), mid2 = clWorld(CUR, CUR.len * 0.28, 0);
+    const p0 = activeP();
+    SHOT.aimAng = Math.atan2(PIN.x - p0.ball.x, PIN.z - p0.ball.z);
+    const acp = addressCamPos(p0);
+    flyCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(gp[0] + gp[2] * 26, elevAt(CUR, CUR.len) + 30, gp[1] + gp[3] * 26),
+      new THREE.Vector3(mid1[0], elevAt(CUR, CUR.len * 0.62) + 24, mid1[1]),
+      new THREE.Vector3(mid2[0], elevAt(CUR, CUR.len * 0.28) + 17, mid2[1]),
+      new THREE.Vector3(acp[0], acp[1], acp[2]),
+    ]);
+    flyLook = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(GREEN.x, GREEN.h + 2, GREEN.z),
+      new THREE.Vector3(mid2[0], elevAt(CUR, CUR.len * 0.28) + 4, mid2[1]),
+      new THREE.Vector3(acp[3], acp[4], acp[5]),
+    ]);
+    flyT = 0;
+    state = 'flyover';
+    camSnap();
+    hudVisible(true);
+    showHint('✕ SKIP');
+    fadeBlackEl.style.opacity = 0;
+  });
+}
+function addressCamPos(p) {
+  const putter = p.lie === 2;
+  const back = putter ? 5.2 : 8.0, up = putter ? 2.1 : 3.0;
+  const ex = p.ball.x - aimDirX() * back, ez = p.ball.z - aimDirZ() * back;
+  const ey = Math.max(p.ball.y + up, groundH(ex, ez) + 1.6);
+  const look = putter ? 9 : 26;
+  return [ex, ey, ez, p.ball.x + aimDirX() * look, p.ball.y + (putter ? 0.3 : 2.2), p.ball.z + aimDirZ() * look];
+}
+/* whose turn: players still to tee off go first (honors order), then farthest */
+function nextTurn() {
+  const open = PLAYERS.filter(p => !p.holed);
+  if (!open.length) return -1;
+  const untee = PLAYERS.filter(p => !p.teed && !p.holed);
+  if (untee.length) {
+    for (let k = 0; k < PLAYERS.length; k++) {
+      const i = (holeStartHonors + k) % PLAYERS.length;
+      if (!PLAYERS[i].teed && !PLAYERS[i].holed) return i;
+    }
+  }
+  let best = -1, bd = -1;
+  for (const p of open) {
+    const d = distToPin(p.ball.x, p.ball.z);
+    if (d > bd) { bd = d; best = p.i; }
+  }
+  return best;
+}
+function beginTurn() {
+  const t = nextTurn();
+  if (t < 0) { holeDone(); return; }
+  turn = t;
+  const p = activeP();
+  p.lie = p.teed ? surfAt(p.ball.x, p.ball.z) : 6;
+  if (CUR.swirl) rollWind(true);
+  suggestClub(p);
+  aimAtPin(p);
+  SHOT.arcDirty = true;
+  greadOn = false; peekOn = false;
+  state = 'address';
+  refreshShotInfo(); refreshClub(); refreshWind();
+  showHint(SHOT.putter ? '←→ AIM · ✕ PUTT METER · △ READ GREEN'
+                       : '←→ AIM · L1/R1 CLUB · ✕ SWING METER');
+  if (PLAYERS.length > 1) {
+    showBanner(p.name + ' — ' + Math.round(distToPin(p.ball.x, p.ball.z)) + ' YDS',
+      'YOUR SHOT', 1.6);
+  }
+}
+function holeDone() {
+  const hi = ROUND.holes[ROUND.idx];
+  // honors next hole: lowest score
+  if (PLAYERS.length > 1) {
+    const a = PLAYERS[0].scores[hi] ?? 99, b = PLAYERS[1].scores[hi] ?? 99;
+    holeStartHonors = b < a ? 1 : 0;
+  }
+  buildCard(false);
+  showScreen(cardUI);
+  hudVisible(false); hideBanner(); showHint('');
+  state = 'card';
+}
+function endRound() {
+  buildCard(true);
+  showScreen(cardUI);
+  hudVisible(false);
+  state = 'roundend';
+  for (const p of PLAYERS) {
+    if (ROUND.holes.length === 18 && Object.keys(p.scores).length === 18) saveBest(DIFF, playedVsPar(p));
+  }
+  SFX.fanfare();
+  if (PLAYERS.length > 1 || true) burst(psConfetti, GREEN.x, GREEN.h + 6, GREEN.z, 40, 3, 2);
+}
+function toTitle() {
+  beginTrans(() => {
+    PLAYERS = [mkPlayer(0)];
+    turn = 0;
+    buildHole(11);   // hole 12 beauty shot
+    refreshTitle();
+    showScreen(titleUI);
+    state = 'title';
+    camSnap();
+    fadeBlackEl.style.opacity = 0;
+  });
+}
+
+/* ── the shot result pipeline ── */
+function strokeAndSwing(power) {
+  const p = activeP();
+  swingPower = power;
+  swingT = 0;
+  state = 'swing';
+  arcPts.visible = false; ringMesh.visible = false;
+  meterWrapEl.style.display = 'none';
+  if (!SHOT.putter) SFX.whoosh(power);   // downswing air, contact follows at strike
+}
+function fireShot() {
+  const p = activeP();
+  p.strokes++;
+  p.teed = true;
+  if (SHOT.putter) { SFX.putt(); launchPutt(p, swingPower); }
+  else {
+    const kind = SHOT.club === 0 ? 'dr' : SHOT.club <= 2 ? 'wood' : 'iron';
+    SFX.strike(swingPower, kind);
+    launchShot(p, swingPower);
+  }
+  state = 'flight';
+  refreshShotInfo();
+}
+function settleBall(msg, sub) {
+  const p = activeP();
+  p.ball.x = FLIGHT.x; p.ball.y = groundH(FLIGHT.x, FLIGHT.z); p.ball.z = FLIGHT.z;
+  p.lie = surfAt(p.ball.x, p.ball.z);
+  refreshShotInfo();
+  // stroke cap (Amateur): double par, then picked up
+  if (DIFF === 'amateur' && !p.holed && p.strokes >= CUR.par * 2) {
+    p.holed = true;
+    p.scores[ROUND.holes[ROUND.idx]] = CUR.par * 2;
+    showBanner('PICKED UP', 'nice try — on to the next one!', 2.2);
+    SFX.plunk();
+    state = 'settle'; settleT = 2.3;
+    return;
+  }
+  if (msg) showBanner(msg, sub || '', 2.2);
+  state = 'settle';
+  settleT = msg ? 2.3 : 1.0;
+}
+function holeOut() {
+  const p = activeP();
+  p.holed = true;
+  const hi = ROUND.holes[ROUND.idx];
+  p.scores[hi] = p.strokes;
+  p.ball.x = PIN.x; p.ball.z = PIN.z; p.ball.y = PIN.y;
+  SFX.cup();
+  const word = scoreWord(p.strokes, CUR.par);
+  const d = p.strokes - CUR.par;
+  if (p.strokes === 1) {
+    // hole-in-one: full replay from a drone angle, then the party
+    replayT = 0; replayActive = true;
+    state = 'replay';
+    camSnap();
+    showBanner('HOLE IN ONE!', 'watch it again!', 3);
+    SFX.fanfare(); SFX.crowd();
+    return;
+  }
+  if (d <= -2) {
+    SFX.fanfare(); SFX.crowd();
+    burst(psConfetti, PIN.x, PIN.y + 5, PIN.z, 50, 3, 2.4);
+    flagBoost = 2.5;
+    showBanner(word, p.name + ' holes it in ' + p.strokes + '!', 2.6);
+  } else if (d === -1) {
+    SFX.chime();
+    burst(psConfetti, PIN.x, PIN.y + 4, PIN.z, 24, 2, 1.8);
+    flagBoost = 2.0;
+    showBanner(word, p.name + ' — one under!', 2.4);
+  } else {
+    showBanner(word, 'in for ' + p.strokes, 1.8);
+  }
+  state = 'settle';
+  settleT = d <= -1 ? 2.7 : 1.9;
+}
+const WATER_TIPS = [
+  'Try a shorter club to lay up short of the water',
+  'Aim away from the blue — the fat of the fairway is safe',
+  'A smoother swing carries trouble — full power drifts',
+];
+function waterDrop(res) {
+  const p = activeP();
+  p.strokes++;   // penalty
+  let dx = res.dropX, dz = res.dropZ;
+  if (dx === null) { const t = teePos(p); dx = t[0]; dz = t[1]; }
+  p.ball.x = dx; p.ball.z = dz; p.ball.y = groundH(dx, dz);
+  p.lie = surfAt(dx, dz);
+  if (p.lie === 5) { const t = teePos(p); p.ball.x = t[0]; p.ball.z = t[1]; p.ball.y = groundH(t[0], t[1]); p.lie = 6; }
+  FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y; FLIGHT.z = p.ball.z;
+  settleBall('SPLASH — DROP +1', WATER_TIPS[(Math.random() * WATER_TIPS.length) | 0]);
+}
+
+/* ── per-state sim tick (fixed 60 Hz) ── */
+function tickSim() {
+  simTick++;
+  if (bannerTimer > 0) { bannerTimer -= DT; if (bannerTimer <= 0) hideBanner(); }
+  if (flagBoost > 0) flagBoost -= DT;
+  if (celebrating > 0) celebrating -= DT;
+
+  switch (state) {
+    case 'trans':
+      transT -= DT;
+      if (transT <= 0 && transNext) { const fn = transNext; transNext = null; fn(); }
+      break;
+    case 'title':
+      if (IN.p2join && PLAYERS.length === 1) { PLAYERS.push(mkPlayer(1)); SFX.confirm(); refreshTitle(); }
+      if (IN.confirm) { SFX.confirm(); menuSel = 0; state = 'diffpick'; showMenu('CHOOSE YOUR GAME', DIFF_OPTS, 0); }
+      break;
+    case 'diffpick':
+      if (IN.p2join && PLAYERS.length === 1) { PLAYERS.push(mkPlayer(1)); SFX.confirm(); }
+      if (IN.up || IN.down) { SFX.menu(); menuSel = 1 - menuSel; showMenu('CHOOSE YOUR GAME', DIFF_OPTS, menuSel); }
+      if (IN.back) { state = 'title'; showScreen(titleUI); refreshTitle(); }
+      else if (IN.confirm) {
+        SFX.confirm();
+        DIFF = menuSel === 0 ? 'amateur' : 'pro';
+        menuSel = 0; state = 'roundpick';
+        showMenu('CHOOSE YOUR ROUND', ROUND_OPTS, 0);
+      }
+      break;
+    case 'roundpick':
+      if (IN.up) { SFX.menu(); menuSel = (menuSel + 2) % 3; showMenu('CHOOSE YOUR ROUND', ROUND_OPTS, menuSel); }
+      if (IN.down) { SFX.menu(); menuSel = (menuSel + 1) % 3; showMenu('CHOOSE YOUR ROUND', ROUND_OPTS, menuSel); }
+      if (IN.back) { menuSel = DIFF === 'amateur' ? 0 : 1; state = 'diffpick'; showMenu('CHOOSE YOUR GAME', DIFF_OPTS, menuSel); }
+      else if (IN.confirm) {
+        SFX.confirm();
+        const sets = [[0, 9, 'FRONT 9'], [9, 18, 'BACK 9'], [0, 18, 'ALL 18']];
+        const s = sets[menuSel];
+        const holes = [];
+        for (let i = s[0]; i < s[1]; i++) holes.push(i);
+        showScreen(null);
+        startRound(DIFF, holes, s[2]);
+      }
+      break;
+    case 'flyover':
+      flyT += DT / 6.2;
+      if (flyT >= 1) { showHint(''); beginTurn(); }
+      else if (IN.confirm && flyT > 1 / 6.2) { showHint(''); camSnap(); beginTurn(); }
+      if (IN.pause) enterPause();
+      break;
+    case 'address': {
+      const p = activeP();
+      let rot = 0;
+      if (IN.aim) rot += IN.aim * 0.65 * DT;
+      if (dragAimAcc) { rot += dragAimAcc * 0.0032; dragAimAcc = 0; }
+      if (rot) { SHOT.aimAng += rot; SHOT.arcDirty = true; refreshWind(); }
+      if (!SHOT.putter) {
+        const minClub = p.lie === 4 ? 8 : 0;   // bunker: must loft out (9i+)
+        if (IN.clubUp && SHOT.club > minClub) { SHOT.club--; SHOT.arcDirty = true; SFX.menu(); refreshClub(); }
+        if (IN.clubDown && SHOT.club < CLUBS.length - 1) { SHOT.club++; SHOT.arcDirty = true; SFX.menu(); refreshClub(); }
+      }
+      if (IN.peek) {
+        if (SHOT.putter) { greadOn = !greadOn; state = greadOn ? 'greenread' : 'address'; camSnap(); }
+        else { peekOn = !peekOn; if (peekOn) { buildCard(false); showScreen(cardUI); } else showScreen(null); }
+      }
+      if (IN.confirm && !peekOn) {
+        SHOT.meterV = 0; SHOT.meterDir = 1;
+        state = 'meter';
+        meterWrapEl.style.display = 'block';
+        showHint('');
+      } else if (IN.confirm && peekOn) { peekOn = false; showScreen(null); }
+      if (IN.pause) enterPause();
+      if (SHOT.arcDirty) simulateArc(p);
+      break;
+    }
+    case 'greenread':
+      if (IN.peek || IN.back || IN.confirm) { greadOn = false; state = 'address'; camSnap(); }
+      if (IN.pause) enterPause();
+      break;
+    case 'meter': {
+      SHOT.meterV += SHOT.meterDir * meterSpeed() * DT;
+      if (SHOT.meterV >= 100) { SHOT.meterV = 100; SHOT.meterDir = -1; }
+      if (SHOT.meterV <= 0 && SHOT.meterDir < 0) { SHOT.meterV = 0; SHOT.meterDir = 1; }
+      if (IN.confirm) {
+        const power = clamp(SHOT.meterV / 100, 0.04, 1);
+        showHint('');
+        strokeAndSwing(power);
+      }
+      if (IN.pause) enterPause();
+      break;
+    }
+    case 'swing':
+      swingT += DT;
+      if (swingT >= 0.25) fireShot();
+      break;
+    case 'flight': {
+      const res = tickBall();
+      if (res) {
+        if (res.ev === 'landed' && res.surf !== 4) SFX.thud(res.surf === 2 || res.surf === 1);
+        if (res.ev === 'holed') holeOut();
+        else if (res.ev === 'water') waterDrop(res);
+        else if (res.ev === 'stopped') {
+          const s = res.surf;
+          settleBall(s === 4 ? 'IN THE SAND' : s === 0 ? 'IN THE ROUGH' : '', s === 4 ? 'loft it out — power drops to 55%' : s === 0 ? 'power drops to 70% from here' : '');
+        }
+      }
+      if (IN.pause) enterPause();
+      break;
+    }
+    case 'settle':
+      if (FLIGHT.on) {   // still rolling after a bounce event downgraded state? (should not happen)
+        tickBall();
+      }
+      settleT -= DT;
+      if (settleT <= 0) {
+        const p = activeP();
+        if (p.holed) {
+          const open = PLAYERS.some(pp => !pp.holed);
+          if (open) beginTurn(); else holeDone();
+        } else beginTurn();
+      }
+      break;
+    case 'replay': {
+      replayT += DT;
+      const dur = Math.max(2.5, FLIGHT.pathN / 40);
+      if (replayT >= dur + 0.6 || (IN.confirm && replayT > 0.5)) {
+        replayActive = false;
+        burst(psConfetti, PIN.x, PIN.y + 5, PIN.z, 60, 3.4, 2.6);
+        flagBoost = 3;
+        showBanner('HOLE IN ONE!', activeP().name + ' — unbelievable!', 2.6);
+        state = 'settle'; settleT = 2.7;
+        camSnap();
+      }
+      break;
+    }
+    case 'card':
+      if (IN.p2join && PLAYERS.length === 1) {
+        PLAYERS.push(mkPlayer(1));
+        SFX.confirm();
+        buildCard(false);
+      }
+      if (IN.confirm) {
+        SFX.confirm();
+        ROUND.idx++;
+        if (ROUND.idx >= ROUND.holes.length) endRound();
+        else startHole();
+      }
+      break;
+    case 'roundend':
+      if (IN.confirm) { SFX.confirm(); toTitle(); }
+      break;
+    case 'pause':
+      if (IN.up) { SFX.menu(); pauseSel = (pauseSel + 2) % 3; drawPause(); }
+      if (IN.down) { SFX.menu(); pauseSel = (pauseSel + 1) % 3; drawPause(); }
+      if (IN.pause) { leavePause(); break; }
+      if (IN.confirm) {
+        SFX.confirm();
+        if (pauseSel === 0) leavePause();
+        else if (pauseSel === 1) { pausePrev = null; showScreen(null); startHole(); }
+        else { pausePrev = null; showScreen(null); toTitle(); }
+      }
+      break;
+  }
+  // particles advance on sim time
+  tickPool(psSand, DT); tickPool(psSplash, DT); tickPool(psConfetti, DT);
+}
+
+let pausePrev = null;
+const PAUSE_OPTS = ['RESUME', 'RESTART HOLE', 'QUIT ROUND'];
+function drawPause() {
+  pauseOptsEl.innerHTML = PAUSE_OPTS.map((o, i) =>
+    `<span class="mopt${i === pauseSel ? ' sel' : ''}">${o}</span>`).join('');
+}
+function enterPause() {
+  if (state === 'pause') return;
+  pausePrev = state;
+  pauseSel = 0;
+  drawPause();
+  hideBanner();
+  showScreen(pauseUI);
+  state = 'pause';
+}
+function leavePause() {
+  showScreen(null);
+  state = pausePrev || 'address';
+  pausePrev = null;
+}
+
+/* ── visuals (every rAF) ── */
+let visT = 0, tpChecked = 0, tpOn = false;
+function updateVisuals(dt, now) {
+  visT += dt;
+  if (!tpOn && visT > tpChecked + 1) {   // once/second: touch overlay present?
+    tpChecked = visT;
+    if (document.getElementById('__arcade_touchpad')) {
+      tpOn = true;
+      document.body.classList.add('tp-on');
+    }
+  }
+  const p = activeP();
+  // balls + shadows
+  for (let i = 0; i < 2; i++) {
+    const pl = PLAYERS[i], m = BALLS[i];
+    if (!pl || state === 'title' || state === 'diffpick' || state === 'roundpick' || pl.holed) { m.visible = false; continue; }
+    m.visible = true;
+    if (i === turn && (state === 'flight' || state === 'settle' && FLIGHT.on)) {
+      m.position.set(FLIGHT.x, FLIGHT.y + 0.16, FLIGHT.z);
+    } else if (i === turn && state === 'replay') {
+      const dur = Math.max(2.5, FLIGHT.pathN / 40);
+      const f = clamp(replayT / dur, 0, 1) * (FLIGHT.pathN - 1);
+      const i0 = Math.floor(f), frac = f - i0;
+      const i1 = Math.min(FLIGHT.pathN - 1, i0 + 1);
+      m.position.set(
+        lerp(FLIGHT.path[i0 * 3], FLIGHT.path[i1 * 3], frac),
+        lerp(FLIGHT.path[i0 * 3 + 1], FLIGHT.path[i1 * 3 + 1], frac) + 0.16,
+        lerp(FLIGHT.path[i0 * 3 + 2], FLIGHT.path[i1 * 3 + 2], frac));
+    } else {
+      m.position.set(pl.ball.x, pl.ball.y + 0.16, pl.ball.z);
+    }
+  }
+  const activeBall = BALLS[turn];
+  if (activeBall && activeBall.visible) {
+    SHADOW_BALL.visible = true;
+    const bx = activeBall.position.x, bz = activeBall.position.z;
+    SHADOW_BALL.position.set(bx, groundH(bx, bz) + 0.04, bz);
+  } else SHADOW_BALL.visible = false;
+  // golfer
+  const showG = ['address', 'meter', 'swing', 'flight', 'settle', 'greenread'].includes(state) ||
+    (state === 'pause' && ['address', 'meter', 'swing'].includes(pausePrev));
+  for (let i = 0; i < GOLFERS.length; i++) GOLFERS[i].visible = false;
+  if (showG && p) {
+    const g = GOLFERS[p.i];
+    g.visible = true;
+    const lx = -Math.cos(SHOT.aimAng), lz = Math.sin(SHOT.aimAng);
+    const gx = p.ball.x + lx * 0.85, gz = p.ball.z + lz * 0.85;
+    g.position.set(gx, groundH(gx, gz), gz);
+    g.rotation.y = Math.atan2(p.ball.x - gx, p.ball.z - gz);
+    const arms = g.userData.arms;
+    if (state === 'meter') arms.rotation.z = -(SHOT.meterV / 100) * 2.0 - 0.1;
+    else if (state === 'swing') arms.rotation.z = lerp(-(swingPower) * 2.0 - 0.1, 1.7, smoothstep(swingT / 0.25));
+    else if (state === 'flight' && FLIGHT.t < 0.6) arms.rotation.z = 1.7;
+    else arms.rotation.z = -0.1 + Math.sin(visT * 1.3) * 0.03;
+    SHADOW_GOLFER.visible = true;
+    SHADOW_GOLFER.position.set(gx, groundH(gx, gz) + 0.05, gz);
+  } else SHADOW_GOLFER.visible = false;
+  // aim arc
+  arcPts.visible = (state === 'address' || state === 'meter') && !peekOn;
+  ringMesh.visible = arcPts.visible && !SHOT.putter;
+  if (ringMesh.visible) {
+    const s2 = 1 + Math.sin(visT * 4) * 0.12;
+    ringMesh.scale.set(s2, s2, s2);
+  }
+  if (greenArrows) greenArrows.visible = (state === 'greenread') || (SHOT.putter && DIFF === 'pro' && (state === 'address' || state === 'meter'));
+  // flag flutter
+  if (flagCloth) {
+    const f = 0.22 + (flagBoost > 0 ? 0.8 : 0) + WIND.mph * 0.02;
+    flagCloth.rotation.y = Math.sin(visT * (3 + WIND.mph * 0.3)) * f;
+    flagGrp.rotation.y = WIND.dir;
+  }
+  // water shine
+  if (waterShine && !LOWFX) {
+    waterShine.position.x = Math.sin(visT * 0.4) * 0.9;
+    waterShine.material.opacity = 0.07 + (Math.sin(visT * 0.9) * 0.5 + 0.5) * 0.07;
+  }
+  // meter HUD
+  if (state === 'meter') {
+    meterFillEl.style.width = SHOT.meterV.toFixed(1) + '%';
+    meterPctEl.textContent = Math.round(SHOT.meterV) + '%';
+  }
+  updateCamera(dt);
+}
+
+function updateCamera(dt) {
+  const p = activeP();
+  switch (state) {
+    case 'title': case 'diffpick': case 'roundpick': {
+      // slow orbit over hole 12's green
+      // hole 12 beauty shot: hover past the tee, creek in the foreground,
+      // flag + azalea banks behind; slow lateral drift
+      const w = clWorld(CUR, 30, -8 + Math.sin(visT * 0.045) * 10);
+      camGoal(w[0], elevAt(CUR, 30) + 13, w[1], GREEN.x, GREEN.h + 2, GREEN.z, 2.5, dt);
+      setFov(50);
+      break;
+    }
+    case 'trans': break;
+    case 'flyover': {
+      const t = smoothstep(clamp(flyT, 0, 1));
+      const pos = flyCurve.getPoint(t);
+      const look = flyLook.getPoint(smoothstep(clamp(flyT * 1.05, 0, 1)));
+      const sway = LOWFX ? 0 : Math.sin(visT * 1.7) * 0.35 * (1 - t);
+      camera.position.set(pos.x, pos.y + sway, pos.z);
+      camera.lookAt(look);
+      CAMR.ready = false;
+      setFov(50);
+      break;
+    }
+    case 'address': case 'meter': case 'swing': case 'card': case 'roundend': {
+      const a = addressCamPos(p);
+      camGoal(a[0], a[1], a[2], a[3], a[4], a[5], 3.2, dt);
+      setFov(SHOT.putter ? 46 : 50);
+      break;
+    }
+    case 'flight': {
+      const sp = Math.hypot(FLIGHT.vx, FLIGHT.vz) + 0.01;
+      const dx = FLIGHT.vx / sp, dz = FLIGHT.vz / sp;
+      const back = FLIGHT.mode === 'roll' ? 6 : 9.5;
+      const up = FLIGHT.mode === 'roll' ? 2.4 : 4.2;
+      const ex = FLIGHT.x - dx * back, ez = FLIGHT.z - dz * back;
+      const ey = Math.max(FLIGHT.y + up, groundH(ex, ez) + 1.4);
+      camGoal(ex, ey, ez, FLIGHT.x, FLIGHT.y + 0.5, FLIGHT.z, 4.2, dt);
+      setFov(50 + clamp(sp * 0.12, 0, 9));
+      break;
+    }
+    case 'settle': {
+      const b = activeP().ball;
+      const dx = aimDirX(), dz = aimDirZ();
+      const ex = b.x - dx * 7, ez = b.z - dz * 7;
+      camGoal(ex, Math.max(b.y + 3, groundH(ex, ez) + 1.5), ez, b.x, b.y + 0.4, b.z, 2.6, dt);
+      setFov(50);
+      break;
+    }
+    case 'greenread': {
+      const h = Math.max(GREEN.grx, GREEN.grz) * 2.3;
+      camGoal(GREEN.x - GREEN.tx * 4, GREEN.h + h, GREEN.z - GREEN.tz * 4,
+        GREEN.x, GREEN.h, GREEN.z, 3.5, dt);
+      setFov(50);
+      break;
+    }
+    case 'replay': {
+      const ex = GREEN.x + GREEN.tz * 30 - GREEN.tx * 14, ez = GREEN.z - GREEN.tx * 30 - GREEN.tz * 14;
+      const m = BALLS[turn].position;
+      camGoal(ex, GREEN.h + 20, ez, m.x, m.y, m.z, 6, dt);
+      setFov(50);
+      break;
+    }
+    case 'pause': break;
+  }
+}
+
+/* ── main loop: fixed 60 Hz sim, decoupled render ── */
+let lastNow = performance.now(), accMs = 0;
+const TL = { fps: 0, calls: 0, tris: 0 };
+let fpsAcc = 0, fpsN = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtReal = Math.min(0.1, (now - lastNow) / 1000);
+  lastNow = now;
+  gatherInput();
+  let n = 0;
+  if (state !== 'boot') {
+    if (TURBO > 0 && state !== 'title' && state !== 'pause') {
+      n = TURBO;
+    } else {
+      accMs += dtReal * 1000;
+      n = Math.floor(accMs / 16.6667);
+      if (n > 5) { n = 5; accMs = 0; } else accMs -= n * 16.6667;
+    }
+  }
+  for (let k = 0; k < n; k++) {
+    tickSim();
+    if (k === 0) clearEdges();       // edges land on exactly one tick
+  }
+  const dtVis = Math.max(dtReal, n * DT);
+  updateVisuals(dtVis, now);
+  renderer.render(scene, camera);
+  TL.calls = renderer.info.render.calls;
+  TL.tris = renderer.info.render.triangles;
+  fpsAcc += dtReal; fpsN++;
+  if (fpsAcc > 0.5) { TL.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
+}
+
+/* ── debug / harness hooks (sim-tick truth, never rAF counts) ── */
+window.__fc = {
+  build: BUILD_TAG,
+  state: () => state,
+  tick: () => simTick,
+  hole: () => (CUR ? CUR.n : 0),
+  players: () => PLAYERS.map(p => ({ name: p.name, strokes: p.strokes, holed: p.holed, lie: p.lie, ball: { x: p.ball.x, y: p.ball.y, z: p.ball.z }, scores: p.scores })),
+  turn: () => turn,
+  meter: () => SHOT.meterV,
+  aim: () => SHOT.aimAng,
+  club: () => (SHOT.putter ? 'PT' : CLUBS[SHOT.club].n),
+  land: () => [SHOT.landX, SHOT.landZ],
+  arc0: () => [arcPos[0], arcPos[1], arcPos[2]],
+  arcEnd: () => [arcPos[(ARC_N - 1) * 3], arcPos[(ARC_N - 1) * 3 + 2]],
+  pin: () => ({ x: PIN.x, y: PIN.y, z: PIN.z }),
+  dist: () => { const p = activeP(); return distToPin(p.ball.x, p.ball.z); },
+  lie: () => activeP().lie,
+  wind: () => ({ mph: WIND.mph, dir: WIND.dir }),
+  setWind: (mph, dir) => { WIND.mph = mph; WIND.dir = dir || 0; WIND.ax = Math.sin(WIND.dir) * mph * WIND_K; WIND.az = Math.cos(WIND.dir) * mph * WIND_K; SHOT.arcDirty = true; refreshWind(); },
+  teleport: (x, z) => {
+    const p = activeP();
+    p.ball.x = x; p.ball.z = z; p.ball.y = groundH(x, z);
+    p.lie = surfAt(x, z); p.teed = true;
+    if (state === 'address' || state === 'meter') { suggestClub(p); aimAtPin(p); simulateArc(p); refreshShotInfo(); refreshClub(); camSnap(); }
+  },
+  gotoHole: (n) => {   // debug: swap the current round hole for 1-based hole n
+    ROUND.holes[ROUND.idx] = n - 1;
+    startHole();
+  },
+  surfAt: (x, z) => surfAt(x, z),
+  groundH: (x, z) => groundH(x, z),
+  green: () => ({ x: GREEN.x, z: GREEN.z, grx: GREEN.grx, grz: GREEN.grz, h: GREEN.h }),
+  clWorld: (d, off) => { const w = clWorld(CUR, d, off); return [w[0], w[1]]; },
+  info: () => ({ calls: TL.calls, tris: TL.tris, fps: TL.fps }),
+  lastBuild: () => window.__fcLastBuild,
+  flightOn: () => FLIGHT.on,
+  diff: () => DIFF,
+  round: () => ({ idx: ROUND.idx, holes: ROUND.holes.slice(), label: ROUND.label }),
+  sweepBuilds: () => {
+    const out = [];
+    for (let i = 0; i < 18; i++) {
+      const ms = buildHole(i);
+      out.push({ hole: i + 1, ms: +ms.toFixed(1) });
+    }
+    buildHole(11);
+    return out;
+  },
+};
+
+/* ── boot ── */
+PLAYERS = [mkPlayer(0)];
+turn = 0;
+buildHole(11);           // title beauty shot: hole 12, Golden Bell
+refreshTitle();
+showScreen(titleUI);
+state = 'title';
+camSnap();
+hudVisible(false);
+requestAnimationFrame(frame);
+setTimeout(() => { fadeBlackEl.style.opacity = 0; }, 120);
+</script>

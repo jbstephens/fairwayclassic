@@ -1,0 +1,777 @@
+<script>
+/* ═══════════ p3 — world: renderer, sky, hole builder, actors ═══════════ */
+
+/* ── renderer / scene / lights (house recipe) ── */
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: false, powerPreference: 'high-performance', stencil: false,
+});
+renderer.setPixelRatio(1);
+renderer.setSize(VW, VH, false);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, VW / VH, 0.2, 2000);
+camera.position.set(0, 4, -12);
+
+const FOGC = 0xdfe9d8;
+scene.fog = new THREE.Fog(FOGC, 260, 850);
+
+const sunLight = new THREE.DirectionalLight(0xfff2dc, 1.0);
+sunLight.position.set(60, 110, -40);
+scene.add(sunLight);
+const hemiLight = new THREE.HemisphereLight(0xdcecff, 0x9adf8b, 0.55);
+scene.add(hemiLight);
+
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+
+/* ── merged-geometry kit with cel-ramp baked lighting ── */
+const SUNDIR = (() => { const v = [0.42, 0.88, -0.22]; const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; })();
+function MD() { return { p: [], c: [] }; }
+function bakeCol(nx, ny, nz, c, out) {
+  const d = nx * SUNDIR[0] + ny * SUNDIR[1] + nz * SUNDIR[2];
+  if (d > 0.55) { out[0] = Math.min(1, c[0] * 1.09 + 0.02); out[1] = Math.min(1, c[1] * 1.05 + 0.015); out[2] = c[2] * 0.98; }
+  else if (d > 0.1) { out[0] = Math.min(1, c[0] * 1.0 + 0.01); out[1] = c[1] * 0.97; out[2] = c[2] * 0.95; }
+  else if (d > -0.15) { out[0] = c[0] * 0.78; out[1] = c[1] * 0.8; out[2] = c[2] * 0.86; }
+  else { out[0] = c[0] * 0.55; out[1] = c[1] * 0.6; out[2] = Math.min(1, c[2] * 0.75 + 0.05); }
+}
+function bakeColWarm(nx, ny, nz, c, out) {
+  const d = nx * SUNDIR[0] + ny * SUNDIR[1] + nz * SUNDIR[2];
+  if (d > 0.55) { out[0] = Math.min(1, c[0] * 1.09 + 0.02); out[1] = Math.min(1, c[1] * 1.05 + 0.015); out[2] = c[2] * 0.98; }
+  else if (d > 0.1) { out[0] = Math.min(1, c[0] * 1.0 + 0.01); out[1] = c[1] * 0.97; out[2] = c[2] * 0.94; }
+  else if (d > -0.15) { out[0] = c[0] * 0.82; out[1] = c[1] * 0.79; out[2] = c[2] * 0.74; }
+  else { out[0] = c[0] * 0.6; out[1] = c[1] * 0.55; out[2] = c[2] * 0.48; }
+}
+const _bc = [0, 0, 0];
+function pushTriW(md, ax, ay, az, bx, by, bz, cx, cy, cz, c, warm) {
+  const ux = bx - ax, uy = by - ay, uz = bz - az;
+  const vx = cx - ax, vy = cy - ay, vz = cz - az;
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  (warm ? bakeColWarm : bakeCol)(nx / l, ny / l, nz / l, c, _bc);
+  md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  md.c.push(_bc[0], _bc[1], _bc[2], _bc[0], _bc[1], _bc[2], _bc[0], _bc[1], _bc[2]);
+}
+/* terrain tri: per-corner colors, one face-normal bake factor for all three */
+function pushTriT(md, ax, ay, az, bx, by, bz, cx, cy, cz, ca, cb, cc) {
+  const ux = bx - ax, uy = by - ay, uz = bz - az;
+  const vx = cx - ax, vy = cy - ay, vz = cz - az;
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  bakeCol(nx / l, ny / l, nz / l, ca, _bc); md.c.push(_bc[0], _bc[1], _bc[2]);
+  bakeCol(nx / l, ny / l, nz / l, cb, _bc); md.c.push(_bc[0], _bc[1], _bc[2]);
+  bakeCol(nx / l, ny / l, nz / l, cc, _bc); md.c.push(_bc[0], _bc[1], _bc[2]);
+}
+function mdMesh(md, mat) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(md.p), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(md.c), 3));
+  const m = new THREE.Mesh(g, mat);
+  m.matrixAutoUpdate = false;
+  m.updateMatrix();
+  return m;
+}
+/* outward-wound triangle for lathe-like shapes: face normal must point AWAY
+   from the vertical axis at (cx,cz) — inward-wound sides get backface-culled
+   and domes read as crescents (found on the azalea banks, v1). */
+function triOut(md, cx, cz, A, B, C, c, warm) {
+  const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]);
+  const ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]);
+  const nz = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+  const mx = (A[0] + B[0] + C[0]) / 3 - cx, mz = (A[2] + B[2] + C[2]) / 3 - cz;
+  let hint = nx * mx + nz * mz;
+  if (Math.abs(hint) < 1e-9) hint = ny;
+  if (hint < 0) pushTriW(md, A[0], A[1], A[2], C[0], C[1], C[2], B[0], B[1], B[2], c, warm);
+  else pushTriW(md, A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2], c, warm);
+}
+/* low-poly cone (pine canopy tier) into an MD */
+function coneW(md, x, y, z, r, h, seg, c, warm) {
+  for (let s = 0; s < seg; s++) {
+    const a0 = TAU * s / seg, a1 = TAU * (s + 1) / seg;
+    triOut(md, x, z,
+      [x + Math.cos(a0) * r, y, z + Math.sin(a0) * r],
+      [x + Math.cos(a1) * r, y, z + Math.sin(a1) * r],
+      [x, y + h, z], c, warm);
+  }
+}
+function trunkW(md, x, y, z, r, h, c) {
+  const seg = 4;
+  for (let s = 0; s < seg; s++) {
+    const a0 = TAU * s / seg + 0.4, a1 = TAU * (s + 1) / seg + 0.4;
+    const b0 = [x + Math.cos(a0) * r, y, z + Math.sin(a0) * r];
+    const b1 = [x + Math.cos(a1) * r, y, z + Math.sin(a1) * r];
+    const t0 = [x + Math.cos(a0) * r * 0.7, y + h, z + Math.sin(a0) * r * 0.7];
+    const t1 = [x + Math.cos(a1) * r * 0.7, y + h, z + Math.sin(a1) * r * 0.7];
+    triOut(md, x, z, b0, b1, t1, c, true);
+    triOut(md, x, z, b0, t1, t0, c, true);
+  }
+}
+/* bumpy mound (azalea / dogwood bank) */
+function moundW(md, x, y, z, r, hMul, c, rng, warm) {
+  const seg = 6, tiers = [[1.0, 0], [0.82, 0.5], [0.5, 0.85], [0, 1.05]];
+  for (let i = 0; i < tiers.length - 1; i++) {
+    const [r0, h0] = tiers[i], [r1, h1] = tiers[i + 1];
+    for (let s = 0; s < seg; s++) {
+      const a0 = TAU * s / seg, a1 = TAU * (s + 1) / seg;
+      const j = 1 + (rng() - 0.5) * 0.35;
+      const cc = [clamp(c[0] * j, 0, 1), clamp(c[1] * j, 0, 1), clamp(c[2] * j, 0, 1)];
+      const p00 = [x + Math.cos(a0) * r * r0, y + h0 * r * hMul, z + Math.sin(a0) * r * r0];
+      const p01 = [x + Math.cos(a1) * r * r0, y + h0 * r * hMul, z + Math.sin(a1) * r * r0];
+      const p10 = [x + Math.cos(a0) * r * r1, y + h1 * r * hMul, z + Math.sin(a0) * r * r1];
+      const p11 = [x + Math.cos(a1) * r * r1, y + h1 * r * hMul, z + Math.sin(a1) * r * r1];
+      if (r1 < 0.001) {
+        triOut(md, x, z, p00, p01, [x, y + h1 * r * hMul, z], cc, warm);
+      } else {
+        triOut(md, x, z, p00, p01, p11, cc, warm);
+        triOut(md, x, z, p00, p11, p10, cc, warm);
+      }
+    }
+  }
+}
+
+/* ── gradient sky dome + sun (built once; fog color matches horizon) ── */
+(function buildSky() {
+  const geo = new THREE.SphereGeometry(950, 20, 12);
+  const cnt = geo.attributes.position.count;
+  const colors = new Float32Array(cnt * 3);
+  const zen = col(0x5f9fd8), mid = col(0x9cc8e8), hor = col(0xe6ecd6);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < cnt; i++) {
+    const y = pos.getY(i) / 950;
+    const t = clamp(y, 0, 1);
+    const c = t < 0.28 ? mix3(hor, mid, smoothstep(t / 0.28)) : mix3(mid, zen, smoothstep((t - 0.28) / 0.72));
+    colors[i * 3] = c[0]; colors[i * 3 + 1] = c[1]; colors[i * 3 + 2] = c[2];
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
+  const dome = new THREE.Mesh(geo, mat);
+  dome.renderOrder = -10;
+  dome.frustumCulled = false;
+  dome.matrixAutoUpdate = false;
+  scene.add(dome);
+  // sun disc + halo — geometry glow, never post
+  const mk = (r, cc, op, blend) => {
+    const md = MD();
+    for (let s = 0; s < 14; s++) {
+      const a0 = TAU * s / 14, a1 = TAU * (s + 1) / 14;
+      md.p.push(0, 0, 0, Math.cos(a0) * r, Math.sin(a0) * r, 0, Math.cos(a1) * r, Math.sin(a1) * r, 0);
+      md.c.push(cc[0], cc[1], cc[2], cc[0], cc[1], cc[2], cc[0], cc[1], cc[2]);
+    }
+    return mdMesh(md, new THREE.MeshBasicMaterial({
+      vertexColors: true, fog: false, transparent: true, opacity: op,
+      blending: blend ? THREE.AdditiveBlending : THREE.NormalBlending, depthWrite: false,
+    }));
+  };
+  const sg = new THREE.Group();
+  const halo = mk(95, [1, 0.95, 0.78], 0.32, true);
+  const disc = mk(34, [1, 0.99, 0.92], 0.95, false);
+  sg.add(halo); sg.add(disc);
+  sg.position.set(370, 700, -210);
+  sg.lookAt(0, 0, 0);
+  scene.add(sg);
+})();
+
+/* ── shared materials (never disposed) ── */
+const MAT_TERRAIN = new THREE.MeshBasicMaterial({ vertexColors: true });
+const MAT_SCENERY = new THREE.MeshBasicMaterial({ vertexColors: true });
+const MAT_WATER = new THREE.MeshBasicMaterial({ vertexColors: true });
+const MAT_SHINE = new THREE.MeshBasicMaterial({
+  color: 0xbfe8ff, transparent: true, opacity: 0.1,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const MAT_PROPS = new THREE.MeshBasicMaterial({ vertexColors: true });
+const MAT_ARROWS = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide });
+const MAT_SHADOW = new THREE.MeshBasicMaterial({ color: 0x123317, transparent: true, opacity: 0.32, depthWrite: false });
+
+/* ── per-hole state (rebuilt at each hole transition) ── */
+let CUR = null;            // current hole record
+let groundH = (x, z) => 0; // physics-authoritative terrain height (== rendered tris)
+let anaColorAt = null;
+const HOLE_OBJS = [];      // meshes to remove+dispose on transition
+const TREES = [];          // {x, z, cr, cy0, cy1} canopy collision volumes
+const WATERS = [];         // resolved water shapes (world-space test fns)
+let PIN = { x: 0, y: 0, z: 0 };
+let GREEN = null;          // {x, z, grx, grz, tx, tz, nx, nz, h}
+let flagGrp = null, flagCloth = null;
+let waterShine = null;
+let greenArrows = null;
+
+function disposeHole() {
+  for (const m of HOLE_OBJS) {
+    scene.remove(m);
+    if (m.geometry) m.geometry.dispose();
+    if (m.material && m.material.dispose && ![MAT_TERRAIN, MAT_SCENERY, MAT_WATER, MAT_SHINE, MAT_PROPS, MAT_ARROWS, MAT_SHADOW].includes(m.material)) m.material.dispose();
+  }
+  HOLE_OBJS.length = 0;
+  TREES.length = 0;
+  WATERS.length = 0;
+  flagGrp = null; flagCloth = null; waterShine = null; greenArrows = null;
+}
+
+/* elevation profile: [[frac, yds]] control points, smoothstep between */
+function elevAt(H, d) {
+  const f = clamp(d / H.len, 0, 1);
+  const e = H.elv;
+  for (let i = 0; i < e.length - 1; i++) {
+    if (f <= e[i + 1][0] || i === e.length - 2) {
+      const t = smoothstep((f - e[i][0]) / (e[i + 1][0] - e[i][0] || 1));
+      return lerp(e[i][1], e[i + 1][1], t);
+    }
+  }
+  return e[e.length - 1][1];
+}
+
+/* the whole-hole analytic field: height + surface + color in one pass */
+function makeHoleField(H) {
+  const gp = clPoint(H, H.len);
+  const gx = gp[0], gz = gp[1], gtx = gp[2], gtz = gp[3];   // green center + approach dir
+  const g = H.green;
+  const grx = g.r * (g.gex || 1), grz = g.r * (g.gex ? 0.55 : 1);
+  const gh = elevAt(H, H.len);
+  GREEN = { x: gx, z: gz, grx, grz, tx: gtx, tz: gtz, h: gh, sx: g.sx, sz: g.sz, r: g.r };
+  // resolved hazards in world space
+  const bunk = H.bunkers.map(b => {
+    const w = clWorld(H, b[0], b[1]);
+    const p = clPoint(H, b[0]);
+    return { x: w[0], z: w[1], rx: b[2], rz: b[3], tx: p[2], tz: p[3] };
+  });
+  const wat = H.water.map(w => {
+    if (w.t === 'pond') {
+      const c = clWorld(H, w.d, w.off);
+      const p = clPoint(H, w.d);
+      const wl = elevAt(H, w.d) - 0.55;
+      return { t: 'pond', x: c[0], z: c[1], rx: w.rx, rz: w.rz, tx: p[2], tz: p[3], wl };
+    }
+    const wl = elevAt(H, w.d) - 0.55;
+    return { t: 'creek', d: w.d, w: w.w, wl };
+  });
+  for (const w of wat) WATERS.push(w);
+  // local green-frame coords of (x,z)
+  function greenLoc(x, z, out) {
+    const dx = x - gx, dz = z - gz;
+    out[0] = dx * gtz - dz * gtx;      // lateral (right of approach +)
+    out[1] = dx * gtx + dz * gtz;      // along approach
+  }
+  const _gl = [0, 0];
+  function waterMask(w, x, z, d, off) {
+    if (w.t === 'pond') {
+      const dx = x - w.x, dz = z - w.z;
+      const lx = dx * w.tz - dz * w.tx, lz = dx * w.tx + dz * w.tz;
+      const rr = Math.hypot(lx / w.rx, lz / w.rz);
+      return clamp((1 - rr) * 4 + 1, 0, 1);          // 1 inside, 0 outside band
+    }
+    const dd = Math.abs(d - w.d) - w.w / 2;
+    if (Math.abs(off) > 72) return 0;
+    return clamp(1 - dd * 0.7, 0, 1);
+  }
+  function bunkMask(b, x, z) {
+    const dx = x - b.x, dz = z - b.z;
+    const lx = dx * b.tz - dz * b.tx, lz = dx * b.tx + dz * b.tz;
+    const rr = Math.hypot(lx / b.rx, lz / b.rz);
+    return clamp((1 - rr) * 3 + 1, 0, 1);
+  }
+  /* height + classification.  out = [h, surfCode]
+     surf: 0 rough, 1 fairway, 2 green, 3 fringe, 4 sand, 5 water, 6 tee */
+  const _out = [0, 0];
+  function field(x, z) {
+    const dof = clDoff(H, x, z);
+    const d = dof[0], off = dof[1], away = Math.abs(off);
+    let h = elevAt(H, d);
+    h += vnoise(x * 0.045, z * 0.045) * (0.22 + smoothstep((away - H.fw - 4) / 26) * 1.5);
+    h += smoothstep((away - 46) / 24) * 3.2;
+    let surf = 0;
+    if (H.fw > 0 && away < H.fw && d > 8 && d < H.len - grz * 0.5) surf = 1;
+    if (d < 12 && away < 7) { surf = 6; h = elevAt(H, 0); }
+    // green plateau
+    greenLoc(x, z, _gl);
+    const rr = Math.hypot(_gl[0] / (grx + 7), _gl[1] / (grz + 7));
+    if (rr < 1.15) {
+      const plane = gh + g.sx * _gl[0] + g.sz * _gl[1];
+      h = lerp(h, plane, smoothstep((1.15 - rr) / 0.3));
+      const rrT = Math.hypot(_gl[0] / grx, _gl[1] / grz);
+      if (rrT < 1) surf = 2;
+      else if (rrT < 1.3) surf = 3;
+    }
+    // bunkers: depression + sand
+    for (let i = 0; i < bunk.length; i++) {
+      const m = bunkMask(bunk[i], x, z);
+      if (m > 0) {
+        h -= m * 1.15;
+        if (m > 0.45) surf = 4;
+      }
+    }
+    // water: basin + surface
+    for (let i = 0; i < wat.length; i++) {
+      const m = waterMask(wat[i], x, z, d, off);
+      if (m > 0) {
+        h = Math.min(h, lerp(h, wat[i].wl - 1.6, m));
+        if (m > 0.52) surf = 5;
+      }
+    }
+    _out[0] = h; _out[1] = surf;
+    return _out;
+  }
+  field.greenLoc = greenLoc;
+  field.wat = wat;
+  field.bunk = bunk;
+  return field;
+}
+
+/* world-space surface under a point — the physics/lie authority */
+let FIELD = null;
+function surfAt(x, z) { return FIELD ? FIELD(x, z)[1] : 0; }
+const SURF_NAMES = ['ROUGH', 'FAIRWAY', 'GREEN', 'FRINGE', 'BUNKER', 'WATER', 'TEE'];
+
+/* ── colors ── */
+const C_FW_A = col(0x4fae43), C_FW_B = col(0x3f9636);
+const C_ROUGH = col(0x2f7c31), C_ROUGH2 = col(0x276b2a);
+const C_STRAW = col(0x8a6a3c), C_GREEN_A = col(0x5cc04f), C_GREEN_B = col(0x50b046);
+const C_FRINGE = col(0x459e3c), C_SAND = col(0xf0e6c4), C_SANDLO = col(0xd8cba0);
+const C_MUD = col(0x27412c), C_TEE = col(0x53b449);
+const C_WATER = col(0x1c4667), C_WATER2 = col(0x265a7c);
+const C_PINE = col(0x1c4a25), C_PINE2 = col(0x275930), C_TRUNK = col(0x4c3a27);
+const C_AZALEA = col(0xe06a9f), C_AZALEA2 = col(0xf2a0c2), C_DOGWOOD = col(0xf2ede0);
+
+/* ── the hole builder — fires only at hole transitions ── */
+const GRID_STEP = 2.0;
+function buildHole(idx) {
+  const t0 = performance.now();
+  disposeHole();
+  const H = HOLES[idx];
+  CUR = H;
+  FIELD = makeHoleField(H);
+  const rng = mulberry32(1234 + idx * 977);
+
+  // bounding box of centerline + corridor
+  let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+  for (const p of H.pts) {
+    minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+    minZ = Math.min(minZ, p[1]); maxZ = Math.max(maxZ, p[1]);
+  }
+  const PADS = 74, PADT = 30;
+  const x0 = minX - PADS, z0 = minZ - PADT, x1 = maxX + PADS, z1 = maxZ + PADS;
+  const nx = Math.ceil((x1 - x0) / GRID_STEP), nz = Math.ceil((z1 - z0) / GRID_STEP);
+  const HF = new Float32Array((nx + 1) * (nz + 1));
+  const SC = new Uint8Array((nx + 1) * (nz + 1));
+  const CC = new Float32Array((nx + 1) * (nz + 1) * 3);
+  const gi = (ix, iz) => iz * (nx + 1) + ix;
+  const _c = [0, 0, 0];
+  for (let iz = 0; iz <= nz; iz++) {
+    for (let ix = 0; ix <= nx; ix++) {
+      const x = x0 + ix * GRID_STEP, z = z0 + iz * GRID_STEP;
+      const r = FIELD(x, z);
+      const id = gi(ix, iz);
+      HF[id] = r[0];
+      SC[id] = r[1];
+      // base color by surface
+      const dof = clDoff(H, x, z);
+      const d = dof[0], away = Math.abs(dof[1]);
+      const n = vnoise(x * 0.6, z * 0.6) * 0.5 + 0.5;
+      let c;
+      switch (r[1]) {
+        case 1: c = (Math.floor(d / 9) % 2) ? C_FW_A : C_FW_B; break;
+        case 6: c = C_TEE; break;
+        case 2: {
+          FIELD.greenLoc(x, z, _c);
+          c = (Math.floor((_c[0] + _c[1] * 0.6) / 4.5) % 2) ? C_GREEN_A : C_GREEN_B;
+          break;
+        }
+        case 3: c = C_FRINGE; break;
+        case 4: c = mix3(C_SAND, C_SANDLO, n, [0, 0, 0]); break;
+        case 5: c = C_MUD; break;
+        default: {
+          // pine straw lives under the tree lines, not beside the fairway
+          const strawT = smoothstep((away - H.fw - 24) / 26);
+          c = mix3(n > 0.5 ? C_ROUGH : C_ROUGH2, C_STRAW, strawT * (0.45 + n * 0.4), [0, 0, 0]);
+        }
+      }
+      const j = 1 + (vnoise(x * 1.7, z * 1.7)) * 0.06;
+      CC[id * 3] = clamp(c[0] * j, 0, 1);
+      CC[id * 3 + 1] = clamp(c[1] * j, 0, 1);
+      CC[id * 3 + 2] = clamp(c[2] * j, 0, 1);
+    }
+  }
+  // physics == rendered triangulation (diagonal p00-p11, same as emission)
+  groundH = function (x, z) {
+    if (x < x0 || z < z0 || x >= x1 - GRID_STEP || z >= z1 - GRID_STEP) return FIELD(x, z)[0];
+    const fx = (x - x0) / GRID_STEP, fz = (z - z0) / GRID_STEP;
+    const ix = Math.floor(fx), iz = Math.floor(fz);
+    const u = fx - ix, v = fz - iz;
+    const y00 = HF[gi(ix, iz)], y10 = HF[gi(ix + 1, iz)];
+    const y01 = HF[gi(ix, iz + 1)], y11 = HF[gi(ix + 1, iz + 1)];
+    return v >= u ? y00 + u * (y11 - y01) + v * (y01 - y00)
+                  : y00 + u * (y10 - y00) + v * (y11 - y10);
+  };
+  // emit terrain tris (corridor-clipped; grid heights exist everywhere)
+  const md = MD();
+  const _ca = [0, 0, 0], _cb = [0, 0, 0], _cc2 = [0, 0, 0];
+  const gc = (id, out) => { out[0] = CC[id * 3]; out[1] = CC[id * 3 + 1]; out[2] = CC[id * 3 + 2]; return out; };
+  for (let iz = 0; iz < nz; iz++) {
+    for (let ix = 0; ix < nx; ix++) {
+      const cx = x0 + (ix + 0.5) * GRID_STEP, cz = z0 + (iz + 0.5) * GRID_STEP;
+      const dof = clDoff(H, cx, cz);
+      if (Math.abs(dof[1]) > 72 && dof[0] > 4 && dof[0] < H.len - 4) continue;
+      if (Math.abs(dof[1]) > 78) continue;
+      const i00 = gi(ix, iz), i10 = gi(ix + 1, iz), i01 = gi(ix, iz + 1), i11 = gi(ix + 1, iz + 1);
+      const ax = x0 + ix * GRID_STEP, az = z0 + iz * GRID_STEP;
+      const bx = ax + GRID_STEP, bz = az + GRID_STEP;
+      // tri (p00, p01, p11) and (p00, p11, p10) — up-facing winding
+      pushTriT(md, ax, HF[i00], az, ax, HF[i01], bz, bx, HF[i11], bz, gc(i00, _ca), gc(i01, _cb), gc(i11, _cc2));
+      pushTriT(md, ax, HF[i00], az, bx, HF[i11], bz, bx, HF[i10], az, gc(i00, _ca), gc(i11, _cb), gc(i10, _cc2));
+    }
+  }
+  const terrain = mdMesh(md, MAT_TERRAIN);
+  scene.add(terrain); HOLE_OBJS.push(terrain);
+
+  // water surfaces
+  if (FIELD.wat.length) {
+    const wm = MD(), sm = MD();
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const cx = x0 + (ix + 0.5) * GRID_STEP, cz = z0 + (iz + 0.5) * GRID_STEP;
+        const s = FIELD(cx, cz);
+        if (s[1] !== 5) continue;
+        // which shape's level?
+        let wl = -1e9;
+        for (const w of FIELD.wat) wl = Math.max(wl, w.wl);
+        const ax = x0 + ix * GRID_STEP, az = z0 + iz * GRID_STEP;
+        const bx = ax + GRID_STEP, bz = az + GRID_STEP;
+        const n = vnoise(cx * 0.4, cz * 0.4) * 0.5 + 0.5;
+        const c = mix3(C_WATER, C_WATER2, n, [0, 0, 0]);
+        wm.p.push(ax, wl, az, ax, wl, bz, bx, wl, bz, ax, wl, az, bx, wl, bz, bx, wl, az);
+        for (let k = 0; k < 6; k++) wm.c.push(c[0], c[1], c[2]);
+        if (((ix + iz * 3) % 7) === 0) {
+          sm.p.push(ax, wl + 0.07, az, ax + 1.2, wl + 0.07, bz, bx, wl + 0.07, bz - 1.1);
+        }
+      }
+    }
+    const wmesh = mdMesh(wm, MAT_WATER);
+    scene.add(wmesh); HOLE_OBJS.push(wmesh);
+    if (sm.p.length) {
+      const sg2 = new THREE.BufferGeometry();
+      sg2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(sm.p), 3));
+      waterShine = new THREE.Mesh(sg2, MAT_SHINE);
+      scene.add(waterShine); HOLE_OBJS.push(waterShine);
+    }
+  }
+
+  // ── scenery: pines + flower banks, merged into ONE mesh ──
+  const sc = MD();
+  function pine(x, z, s) {
+    const y = groundH(x, z) - 0.3;
+    if (y < -900) return;
+    const hTrunk = (5.5 + rng() * 2.5) * s, rTrunk = 0.5 * s;
+    const j = 0.8 + rng() * 0.45;
+    const cnp = mix3(C_PINE, C_PINE2, rng(), [0, 0, 0]);
+    cnp[0] *= j; cnp[1] *= j; cnp[2] *= j;
+    trunkW(sc, x, y, z, rTrunk, hTrunk, C_TRUNK);
+    const base = y + hTrunk * 0.68;
+    const rC = (2.6 + rng() * 1.3) * s;
+    coneW(sc, x, base, z, rC, 4.6 * s, 6, cnp, true);
+    coneW(sc, x, base + 2.6 * s, z, rC * 0.72, 3.9 * s, 6, cnp, true);
+    coneW(sc, x, base + 4.7 * s, z, rC * 0.45, 3.1 * s, 5, cnp, true);
+    TREES.push({ x, z, cr: rC * 0.85, cy0: base + 0.6, cy1: base + 7.5 * s });
+  }
+  function safeSpot(x, z, margin) {
+    const s = FIELD(x, z)[1];
+    if (s === 5 || s === 4 || s === 2 || s === 3 || s === 6) return false;
+    const dgx = x - GREEN.x, dgz = z - GREEN.z;
+    if (Math.hypot(dgx, dgz) < GREEN.grx + margin) return false;
+    return true;
+  }
+  // flanking bands (double row) + boundary wall of pines
+  for (let d = 14; d < H.len + 6; d += 6.5) {
+    for (const side of [-1, 1]) {
+      if (rng() < 0.22) continue;
+      const off = side * ((H.chute ? H.fw + 9 : Math.max(H.fw + 13, 21)) + rng() * 34);
+      const w = clWorld(H, d + (rng() - 0.5) * 5, off);
+      if (safeSpot(w[0], w[1], 14)) pine(w[0], w[1], 0.85 + rng() * 0.55);
+    }
+  }
+  for (let d = -16; d < H.len + 34; d += 8.5) {
+    for (const side of [-1, 1]) {
+      const off = side * (56 + rng() * 15);
+      const w = clWorld(H, d, off);
+      if (safeSpot(w[0], w[1], 10)) pine(w[0], w[1], 1.0 + rng() * 0.6);
+    }
+  }
+  // the wall of pines behind the green
+  for (let k = 0; k < 16; k++) {
+    const off = -52 + k * 7 + (rng() - 0.5) * 4;
+    const w = clWorld(H, H.len + 22 + rng() * 22, off);
+    if (safeSpot(w[0], w[1], 12)) pine(w[0], w[1], 1.05 + rng() * 0.6);
+  }
+  for (const tc of H.tclump) {
+    for (let k = 0; k < tc[3]; k++) {
+      const a = rng() * TAU, r = Math.sqrt(rng()) * tc[2];
+      const w = clWorld(H, tc[0] + Math.cos(a) * r, tc[1] + Math.sin(a) * r * 0.8);
+      if (safeSpot(w[0], w[1], 12)) pine(w[0], w[1], 0.8 + rng() * 0.6);
+    }
+  }
+  // azalea / dogwood banks around the green + creek banks
+  if (H.azalea || H.dogwood) {
+    const cMain = H.azalea ? C_AZALEA : C_DOGWOOD;
+    const cAlt = H.azalea ? C_AZALEA2 : C_DOGWOOD;
+    for (let k = 0; k < 44; k++) {
+      const a = rng() * TAU;
+      const rr = GREEN.grx + 6 + rng() * 16;
+      const x = GREEN.x + Math.cos(a) * rr, z = GREEN.z + Math.sin(a) * rr * 0.9;
+      const s = FIELD(x, z)[1];
+      if (s === 5 || s === 4 || s === 2 || s === 3) continue;
+      const y = groundH(x, z) - 0.3;
+      moundW(sc, x, y, z, 1.9 + rng() * 2.0, 0.75, rng() < 0.5 ? cMain : cAlt, rng, false);
+    }
+    // banks along the front creek if any
+    for (const w of FIELD.wat) {
+      if (w.t !== 'creek') continue;
+      for (let k = 0; k < 22; k++) {
+        const off = -40 + rng() * 80;
+        const p = clWorld(H, w.d + w.w / 2 + 3.5 + rng() * 5, off);
+        const s = FIELD(p[0], p[1])[1];
+        if (s === 5 || s === 4 || s === 2) continue;
+        moundW(sc, p[0], groundH(p[0], p[1]) - 0.3, p[1], 1.6 + rng() * 1.6, 0.75, rng() < 0.5 ? cMain : cAlt, rng, false);
+      }
+    }
+  }
+  const scenery = mdMesh(sc, MAT_SCENERY);
+  scene.add(scenery); HOLE_OBJS.push(scenery);
+
+  // ── pin: cup + flagstick + cloth; tee markers ──
+  const rngP = mulberry32(55 + idx * 31);
+  const pox = (rngP() - 0.5) * GREEN.grx * 0.5, poz = (rngP() - 0.5) * GREEN.grz * 0.5;
+  PIN.x = GREEN.x + GREEN.tz * pox + GREEN.tx * poz;
+  PIN.z = GREEN.z - GREEN.tx * pox + GREEN.tz * poz;
+  PIN.y = groundH(PIN.x, PIN.z);
+  const pm = MD();
+  // cup: dark disc
+  for (let s = 0; s < 8; s++) {
+    const a0 = TAU * s / 8, a1 = TAU * (s + 1) / 8;
+    pm.p.push(PIN.x, PIN.y + 0.02, PIN.z,
+      PIN.x + Math.cos(a1) * 0.36, PIN.y + 0.02, PIN.z + Math.sin(a1) * 0.36,
+      PIN.x + Math.cos(a0) * 0.36, PIN.y + 0.02, PIN.z + Math.sin(a0) * 0.36);
+    for (let k = 0; k < 3; k++) pm.c.push(0.06, 0.08, 0.06);
+  }
+  // tee markers: two white spheres-ish boxes at the tee
+  const tw = clWorld(H, 2, 0);
+  const teeY = groundH(tw[0], tw[1]);
+  for (const s of [-6.5, 6.5]) {
+    const mx = tw[0] + s, mz = tw[1];
+    for (let q = 0; q < 4; q++) {
+      const a0 = TAU * q / 4, a1 = TAU * (q + 1) / 4;
+      pm.p.push(mx, teeY + 0.5, mz,
+        mx + Math.cos(a1) * 0.26, teeY, mz + Math.sin(a1) * 0.26,
+        mx + Math.cos(a0) * 0.26, teeY, mz + Math.sin(a0) * 0.26);
+      for (let k = 0; k < 3; k++) pm.c.push(0.95, 0.94, 0.86);
+    }
+  }
+  const props = mdMesh(pm, MAT_PROPS);
+  scene.add(props); HOLE_OBJS.push(props);
+  // flag: pole + yellow cloth (cloth flutters via its group)
+  flagGrp = new THREE.Group();
+  const poleG = new THREE.CylinderGeometry(0.06, 0.08, 7.4, 5);
+  const pole = new THREE.Mesh(poleG, new THREE.MeshBasicMaterial({ color: 0xf2f0e8 }));
+  pole.position.y = 3.7;
+  flagGrp.add(pole);
+  const clothMd = MD();
+  clothMd.p.push(0, 7.1, 0, 2.3, 6.75, 0, 0, 6.4, 0);
+  const yF = col(0xffd218);
+  for (let k = 0; k < 3; k++) clothMd.c.push(yF[0], yF[1], yF[2]);
+  const clothG = new THREE.BufferGeometry();
+  clothG.setAttribute('position', new THREE.BufferAttribute(new Float32Array(clothMd.p), 3));
+  clothG.setAttribute('color', new THREE.BufferAttribute(new Float32Array(clothMd.c), 3));
+  flagCloth = new THREE.Mesh(clothG, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  flagGrp.add(flagCloth);
+  flagGrp.position.set(PIN.x, PIN.y, PIN.z);
+  scene.add(flagGrp); HOLE_OBJS.push(flagGrp);
+
+  // ── green-read arrows (visible only in green-read / pro putt) ──
+  const am = MD();
+  const aC0 = [1, 1, 1], aC1 = [1, 0.35, 0.25];
+  for (let axk = -4; axk <= 4; axk++) {
+    for (let azk = -4; azk <= 4; azk++) {
+      const lx = axk * GREEN.grx / 4.4, lz = azk * GREEN.grz / 4.4;
+      if (Math.hypot(lx / GREEN.grx, lz / GREEN.grz) > 0.95) continue;
+      const x = GREEN.x + GREEN.tz * lx + GREEN.tx * lz;
+      const z = GREEN.z - GREEN.tx * lx + GREEN.tz * lz;
+      const h0 = groundH(x, z);
+      const gx2 = (groundH(x + 0.8, z) - groundH(x - 0.8, z)) / 1.6;
+      const gz2 = (groundH(x, z + 0.8) - groundH(x, z - 0.8)) / 1.6;
+      const mag = Math.hypot(gx2, gz2);
+      if (mag < 0.001) continue;
+      const dx = -gx2 / mag, dz = -gz2 / mag;   // downhill
+      const L = 1.5, W = 0.42;
+      const tipX = x + dx * L, tipZ = z + dz * L;
+      const c = mix3(aC0, aC1, clamp(mag * 18, 0, 1), [0, 0, 0]);
+      am.p.push(tipX, groundH(tipX, tipZ) + 0.07, tipZ,
+        x - dz * W, h0 + 0.07, z + dx * W,
+        x + dz * W, h0 + 0.07, z - dx * W);
+      for (let k = 0; k < 3; k++) am.c.push(c[0], c[1], c[2]);
+    }
+  }
+  greenArrows = mdMesh(am, MAT_ARROWS);
+  greenArrows.visible = false;
+  scene.add(greenArrows); HOLE_OBJS.push(greenArrows);
+
+  const ms = performance.now() - t0;
+  window.__fcLastBuild = { hole: idx + 1, ms, tris: md.p.length / 9 + sc.p.length / 9 };
+  return ms;
+}
+
+/* ── golfers (toon, 2 lights; one per player) ── */
+function makeRamp() {
+  const data = new Uint8Array([120, 120, 120, 255, 205, 205, 205, 255, 255, 255, 255, 255]);
+  const tex = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
+  tex.minFilter = THREE.NearestFilter; tex.magFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+const TOON = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: makeRamp(), side: THREE.DoubleSide });
+function pushBoxV(md, x, y, z, w, h, d, c) {
+  // axis-aligned box, center of bottom face at (x,y,z); flat vertex colors
+  const xs = [x - w, x + w], ys = [y, y + h], zs = [z - d, z + d];
+  const q = (a, b, cc, dd) => {
+    md.p.push(a[0], a[1], a[2], b[0], b[1], b[2], cc[0], cc[1], cc[2],
+              a[0], a[1], a[2], cc[0], cc[1], cc[2], dd[0], dd[1], dd[2]);
+    for (let k = 0; k < 6; k++) md.c.push(c[0], c[1], c[2]);
+  };
+  const p = (i, j, k) => [xs[i], ys[j], zs[k]];
+  q(p(0,1,1), p(1,1,1), p(1,1,0), p(0,1,0));       // top
+  q(p(0,0,0), p(1,0,0), p(1,0,1), p(0,0,1));       // bottom
+  q(p(0,0,0), p(0,1,0), p(1,1,0), p(1,0,0));       // -z ... winding approx, toon+vertexColors forgiving
+  q(p(1,0,1), p(1,1,1), p(0,1,1), p(0,0,1));       // +z
+  q(p(1,0,0), p(1,1,0), p(1,1,1), p(1,0,1));       // +x
+  q(p(0,0,1), p(0,1,1), p(0,1,0), p(0,0,0));       // -x
+}
+function mdMeshN(md, mat) {   // with normals (lit)
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(md.p), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(md.c), 3));
+  g.computeVertexNormals();
+  return new THREE.Mesh(g, mat);
+}
+function buildGolfer(shirtHex, capHex) {
+  const grp = new THREE.Group();
+  const skin = col(0xd9a077), slacks = col(0x3a3f4a), shoe = col(0x2a2320);
+  const shirt = col(shirtHex), cap = col(capHex);
+  const body = MD();
+  pushBoxV(body, -0.14, 0, 0, 0.09, 0.85, 0.11, slacks);   // legs
+  pushBoxV(body, 0.14, 0, 0, 0.09, 0.85, 0.11, slacks);
+  pushBoxV(body, -0.15, -0.02, 0.02, 0.11, 0.1, 0.16, shoe);
+  pushBoxV(body, 0.15, -0.02, 0.02, 0.11, 0.1, 0.16, shoe);
+  pushBoxV(body, 0, 0.82, 0, 0.26, 0.62, 0.15, shirt);     // torso
+  pushBoxV(body, 0, 1.44, 0, 0.1, 0.09, 0.09, skin);       // neck
+  pushBoxV(body, 0, 1.52, 0, 0.15, 0.3, 0.16, skin);       // head
+  pushBoxV(body, 0, 1.78, 0.0, 0.16, 0.1, 0.17, cap);      // cap
+  pushBoxV(body, 0, 1.78, 0.24, 0.15, 0.045, 0.09, cap);   // brim
+  const bodyMesh = mdMeshN(body, TOON);
+  grp.add(bodyMesh);
+  // arms + club: rotates about the shoulders for the swing
+  const arms = new THREE.Group();
+  arms.position.set(0, 1.38, 0.02);
+  arms.rotation.x = -0.34;             // club leans out to the ball at address
+  const am2 = MD();
+  pushBoxV(am2, -0.3, -0.62, 0.14, 0.07, 0.6, 0.07, shirt);   // upper arms angled in front
+  pushBoxV(am2, 0.3, -0.62, 0.14, 0.07, 0.6, 0.07, shirt);
+  pushBoxV(am2, 0, -0.72, 0.18, 0.08, 0.14, 0.08, skin);      // hands
+  // club shaft + head
+  const steel = col(0xcfd4da), clubhead = col(0x33383f);
+  pushBoxV(am2, 0, -1.62, 0.3, 0.03, 1.0, 0.03, steel);
+  pushBoxV(am2, 0.09, -1.66, 0.3, 0.13, 0.09, 0.07, clubhead);
+  const armsMesh = mdMeshN(am2, TOON);
+  arms.add(armsMesh);
+  grp.add(arms);
+  grp.userData.arms = arms;
+  grp.visible = false;
+  scene.add(grp);
+  return grp;
+}
+const GOLFERS = [buildGolfer(0xf2f0e8, 0xc03428), buildGolfer(0x7ab0e0, 0xf2f0e8)];
+
+/* ── balls (one per player) + blob shadows ── */
+function makeBall() {
+  const g = new THREE.IcosahedronGeometry(0.16, 1);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  m.visible = false;
+  scene.add(m);
+  return m;
+}
+const BALLS = [makeBall(), makeBall()];
+function makeBlob(r) {
+  const g = new THREE.CircleGeometry(r, 10);
+  const m = new THREE.Mesh(g, MAT_SHADOW);
+  m.rotation.x = -Math.PI / 2;
+  m.visible = false;
+  scene.add(m);
+  return m;
+}
+const SHADOW_BALL = makeBlob(0.24), SHADOW_GOLFER = makeBlob(0.62);
+
+/* ── aim arc (pooled dots, one draw call) + landing ring ── */
+const ARC_N = 56;
+const arcGeo = new THREE.BufferGeometry();
+const arcPos = new Float32Array(ARC_N * 3);
+arcGeo.setAttribute('position', new THREE.BufferAttribute(arcPos, 3).setUsage(THREE.DynamicDrawUsage));
+const arcPts = new THREE.Points(arcGeo, new THREE.PointsMaterial({
+  color: 0xfff2b8, size: 4.6, sizeAttenuation: false, transparent: true, opacity: 0.95,
+  depthWrite: false,
+}));
+arcPts.frustumCulled = false;
+arcPts.visible = false;
+scene.add(arcPts);
+const ringMesh = new THREE.Mesh(
+  new THREE.RingGeometry(1.6, 2.2, 24),
+  new THREE.MeshBasicMaterial({ color: 0xffe98c, transparent: true, opacity: 0.75, depthWrite: false, side: THREE.DoubleSide }));
+ringMesh.rotation.x = -Math.PI / 2;
+ringMesh.visible = false;
+scene.add(ringMesh);
+
+/* ── particle pools (sand puff / splash / confetti) ── */
+function makePool(n, size, colors) {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(n * 3), colA = new Float32Array(n * 3);
+  const vel = new Float32Array(n * 3), life = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const c = colors[i % colors.length];
+    colA[i * 3] = c[0]; colA[i * 3 + 1] = c[1]; colA[i * 3 + 2] = c[2];
+    pos[i * 3 + 1] = -999;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  geo.setAttribute('color', new THREE.BufferAttribute(colA, 3));
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+    size, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.95, depthWrite: false,
+  }));
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return { pts, pos, vel, life, n, head: 0, active: 0, geo };
+}
+const POOL_MUL = LOWFX ? 0.5 : 1;
+const psSand = makePool(Math.floor(42 * POOL_MUL), 0.65, [C_SAND, C_SANDLO]);
+const psSplash = makePool(Math.floor(56 * POOL_MUL), 0.6, [col(0xbfe4ff), col(0x7fc0e8), col(0xffffff)]);
+const psConfetti = makePool(Math.floor(84 * POOL_MUL), 0.7, [col(0xffd24a), col(0xff7a9a), col(0x7ae0ff), col(0xa0ff8a), col(0xffffff)]);
+function burst(pool, x, y, z, count, spread, up) {
+  for (let k = 0; k < count; k++) {
+    const i = pool.head; pool.head = (pool.head + 1) % pool.n;
+    pool.pos[i * 3] = x; pool.pos[i * 3 + 1] = y; pool.pos[i * 3 + 2] = z;
+    pool.vel[i * 3] = (Math.random() - 0.5) * spread;
+    pool.vel[i * 3 + 1] = up * (0.5 + Math.random() * 0.9);
+    pool.vel[i * 3 + 2] = (Math.random() - 0.5) * spread;
+    pool.life[i] = 1.0 + Math.random() * 0.9;
+  }
+  pool.active = Math.min(pool.n, pool.active + count);
+}
+function tickPool(pool, dt) {
+  if (!pool.active) return;
+  let alive = 0;
+  for (let i = 0; i < pool.n; i++) {
+    if (pool.life[i] <= 0) continue;
+    pool.life[i] -= dt;
+    if (pool.life[i] <= 0) { pool.pos[i * 3 + 1] = -999; continue; }
+    alive++;
+    pool.vel[i * 3 + 1] -= 5.5 * dt;
+    pool.pos[i * 3] += pool.vel[i * 3] * dt * 3.5;
+    pool.pos[i * 3 + 1] += pool.vel[i * 3 + 1] * dt * 3.5;
+    pool.pos[i * 3 + 2] += pool.vel[i * 3 + 2] * dt * 3.5;
+  }
+  pool.active = alive;
+  pool.geo.attributes.position.needsUpdate = true;
+}
+</script>
