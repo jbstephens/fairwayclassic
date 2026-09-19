@@ -51,6 +51,16 @@ try {
   const t = (name, ok, detail) => { console.log((ok ? 'PASS ' : 'FAIL ') + name + '  ' + detail); if (!ok) fail++; };
   t('right key moves arc right on screen', xR > x0 + 0.01, `x ${x0.toFixed(3)} -> ${xR.toFixed(3)}`);
   t('left key moves arc left on screen', xL < xR - 0.01, `x ${xR.toFixed(3)} -> ${xL.toFixed(3)}`);
+
+  // FC-5: the SAME law in minimap space — aim right must move the projected
+  // landing marker RIGHT on the map canvas (v1 had the map mirrored).
+  const m0 = await page.eval(`window.__fc.mapMarker()`);
+  await hold('ArrowRight', 400);
+  const mR = await page.eval(`window.__fc.mapMarker()`);
+  await hold('ArrowLeft', 800);
+  const mL = await page.eval(`window.__fc.mapMarker()`);
+  t('right key moves MAP marker right', mR[0] > m0[0] + 0.4, `map x ${m0[0].toFixed(1)} -> ${mR[0].toFixed(1)}`);
+  t('left key moves MAP marker left', mL[0] < mR[0] - 0.4, `map x ${mR[0].toFixed(1)} -> ${mL[0].toFixed(1)}`);
   t('zero console errors', page.errors.length === 0, page.errors.join(' | ') || 'clean');
 } finally {
   chrome.kill();

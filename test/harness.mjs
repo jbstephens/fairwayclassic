@@ -583,6 +583,120 @@ async function partF() {
   } finally { await page.close(); }
 }
 
+/* ════════ PART G — FC-5: carry sweep, putter-anywhere, pendulum, map zoom ════════ */
+async function partG() {
+  console.log('\n═══ PART G: FC-5 feel & fidelity ═══');
+  const page = await openPage(CDP);
+  try {
+    await page.nav(`http://localhost:${HTTP}/`);
+    await page.connectPad(0);
+    await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
+    await sleep(400);
+    for (const want of ['diffpick', 'roundpick', 'flyover']) {   // AMATEUR / FRONT 9
+      for (let i = 0; i < 6; i++) {
+        await page.pressPad('south'); await sleep(350);
+        if ((await page.eval('__fc.state()')) === want) break;
+      }
+    }
+    await waitState(page, 'flyover', 'flyover', 15000);
+    await sleep(1200);
+    await page.pressPad('south');
+    await waitState(page, 'address', 'address', 9000);
+    await page.eval('__fc.setWind(0,0)');
+
+    /* 1. carry-table integrity: the REAL launchShot+tickBall per club at
+       100% power, flat ground, no wind — plus the SHARED arc preview */
+    const sweep = await page.eval('JSON.parse(JSON.stringify(__fc.rangeTest()))');
+    console.log('  club sweep:\n' + sweep.map(s =>
+      `    ${s.club.padEnd(3)} launch ${String(s.launch).padStart(4)}°  carry ${s.carry}/${s.table}  preview ${s.prev}  apex ${s.apex}  hang ${s.hang}s`).join('\n'));
+    for (const s of sweep) {
+      ok(Math.abs(s.carry - s.table) <= 5, `${s.club}: landed carry ${s.carry} within ±5 yds of table ${s.table}`);
+      ok(Math.abs(s.prev - s.carry) <= 5, `${s.club}: arc preview ${s.prev} tracks the flight ${s.carry}`);
+    }
+    ok(sweep[0].hang >= 3.6 && sweep[0].hang <= 4.5,
+      `driver hang ${sweep[0].hang}s in the +25% band (v1 was 3.22s)`);
+    globalThis.__clubSweep = sweep;
+
+    /* 2. putter-anywhere (real input), full-swing pose on the way */
+    const toPT = async () => {
+      for (let i = 0; i < 14; i++) {
+        if ((await page.eval('__fc.club()')) === 'PT') return true;
+        await page.pressPad('r1', 70); await sleep(110);
+      }
+      return (await page.eval('__fc.club()')) === 'PT';
+    };
+    await page.eval('__fc.teleport(...__fc.clWorld(200, 0))'); await sleep(250);
+    ok((await page.eval('__fc.lie()')) === 1, 'teleported to a FAIRWAY lie');
+    ok(await toPT(), 'putter selectable on the fairway (R1 cycle past SW)');
+    await page.pressPad('l1'); await sleep(200);
+    ok((await page.eval('__fc.club()')) === 'SW', 'L1 cycles back from putter to SW');
+    // full-club meter drives the (fixed-direction) backswing state
+    await page.pressPad('south');
+    await waitState(page, 'meter', 'meter', 5000);
+    await sleep(300);
+    ok((await page.eval('__fc.pose()')) === 'back', 'full-club meter holds the backswing pose state');
+    await page.pressPad('south');
+    await waitShotDone(page);
+    await page.eval('__fc.teleport(...__fc.clWorld(200, 26))'); await sleep(250);
+    ok((await page.eval('__fc.lie()')) === 0, 'teleported to a ROUGH lie');
+    ok(await toPT(), 'putter selectable in the rough');
+    await page.eval(`(() => { const g = __fc.green(); const k = g.grx * 1.15;
+      __fc.teleport(g.x + g.tz * k, g.z - g.tx * k); })()`);
+    await sleep(250);
+    ok((await page.eval('__fc.lie()')) === 3, 'teleported to a FRINGE lie');
+    ok(await toPT(), 'putter selectable on the fringe');
+    // bunker: loft-out law holds — no putter, min club 9i
+    await page.eval('__fc.teleport(...__fc.clWorld(295, 22))'); await sleep(250);
+    ok((await page.eval('__fc.lie()')) === 4, 'teleported into the fairway BUNKER');
+    for (let i = 0; i < 8; i++) { await page.pressPad('r1', 70); await sleep(110); }
+    ok((await page.eval('__fc.club()')) === 'SW', 'bunker: cycle stops at SW — putter refused');
+    for (let i = 0; i < 8; i++) { await page.pressPad('l1', 70); await sleep(110); }
+    ok((await page.eval('__fc.club()')) === '9i', 'bunker: nothing longer than 9i (loft-out law)');
+
+    /* 3. minimap zoom: full ↔ approach at the 120-yd line, green on the green */
+    await page.eval('__fc.teleport(...__fc.clWorld(140, 0))'); await sleep(700);
+    const dFar = await page.eval('__fc.dist()');
+    const sFull = await page.eval('__fc.mapScale()');
+    ok(dFar > 120 && (await page.eval('__fc.mapZoom()')) === 'full',
+      `map FULL beyond the threshold (${dFar.toFixed(0)} yds)`);
+    await page.eval(`(() => { const g = __fc.green();
+      __fc.teleport(g.x - g.tx * 90, g.z - g.tz * 90); })()`);
+    await sleep(800);
+    const dNear = await page.eval('__fc.dist()');
+    const sAppr = await page.eval('__fc.mapScale()');
+    ok(dNear <= 120 && (await page.eval('__fc.mapZoom()')) === 'approach',
+      `map zooms to APPROACH inside 120 (${dNear.toFixed(0)} yds)`);
+    ok(sAppr > sFull, `approach frame magnifies (${sFull.toFixed(2)} -> ${sAppr.toFixed(2)} px/yd)`);
+    const pin = await page.eval('__fc.pin()');
+    await page.eval(`__fc.teleport(${pin.x - 2.2}, ${pin.z - 2.0})`);
+    await sleep(800);
+    ok((await page.eval('__fc.lie()')) === 2, 'on the GREEN');
+    ok((await page.eval('__fc.mapZoom()')) === 'green', 'map zooms to the GREEN alone');
+    ok((await page.eval('__fc.mapScale()')) > sAppr, 'green frame magnifies further');
+
+    /* 4. the putt pendulum stroke (real input, real states) */
+    await page.pressPad('south');
+    await waitState(page, 'meter', 'putt meter', 5000);
+    await sleep(300);
+    ok((await page.eval('__fc.club()')) === 'PT', 'putter auto-selected on the green');
+    ok((await page.eval('__fc.pose()')) === 'pback', 'putt meter drives the PENDULUM back state');
+    await page.eval(`window.__poseLog = {}; window.__poseRec = true;
+      (function f(){ const p = __fc.pose(); if (p) __poseLog[p] = 1;
+        if (window.__poseRec) requestAnimationFrame(f); })()`);
+    await page.pressPad('south');                                // stroke
+    await sleep(1400);
+    const poses = await page.eval(`(window.__poseRec = false, Object.keys(__poseLog))`);
+    ok(poses.includes('pthru') || poses.includes('phold'),
+      `putt stroke sweeps pendulum-through (saw ${poses.join(',')})`);
+    ok(!poses.includes('thru') && !poses.includes('hold') && !poses.includes('back'),
+      'no full-swing wrap states during a putt');
+    await waitShotDone(page).catch(() => {});
+
+    ok(page.errors.length === 0, 'ZERO console errors across part G' +
+      (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
+  } finally { await page.close(); }
+}
+
 try {
   await partA();
   await partB();
@@ -590,6 +704,7 @@ try {
   await partD();
   await partE();
   await partF();
+  await partG();
 } catch (e) {
   console.error('\nHARNESS THREW:', e.message);
   process.exitCode = 1;

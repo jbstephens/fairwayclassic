@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-4-NOMSAA';
+const BUILD_TAG = 'FC-5-FEEL';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -89,22 +89,71 @@ window.addEventListener('resize', fitStage);
 window.addEventListener('orientationchange', () => setTimeout(fitStage, 60));
 fitStage();
 
-/* ── clubs (carry yds at 100%, loft deg) ── */
+/* ── clubs (carry yds at 100%, launch angle deg) ──
+   FC-5 flight feel: launch angles are REAL launch (driver ~13°, woods ~16°,
+   mid-irons 20–24°, wedges steeper), paired with quadratic air drag so the
+   arc rises fast, hangs, and falls steep — a broadcast tracer, not a line
+   drive.  Carry table integrity: per-club launch speeds are SOLVED
+   numerically at boot (flat ground, no wind, the exact tickBall integrator),
+   so 100%-power carries match the table by construction. */
 const CLUBS = [
-  { n: 'DR', carry: 260, loft: 12 },
-  { n: '3W', carry: 230, loft: 15 },
-  { n: '5W', carry: 210, loft: 18 },
-  { n: '4i', carry: 195, loft: 21 },
-  { n: '5i', carry: 185, loft: 24 },
-  { n: '6i', carry: 175, loft: 27 },
-  { n: '7i', carry: 162, loft: 31 },
-  { n: '8i', carry: 150, loft: 35 },
-  { n: '9i', carry: 138, loft: 39 },
-  { n: 'PW', carry: 120, loft: 44 },
-  { n: 'SW', carry: 85, loft: 54 },
+  { n: 'DR', carry: 260, loft: 13 },
+  { n: '3W', carry: 230, loft: 15.5 },
+  { n: '5W', carry: 210, loft: 16.5 },
+  { n: '4i', carry: 195, loft: 20 },
+  { n: '5i', carry: 185, loft: 21.5 },
+  { n: '6i', carry: 175, loft: 23 },
+  { n: '7i', carry: 162, loft: 24.5 },
+  { n: '8i', carry: 150, loft: 27 },
+  { n: '9i', carry: 138, loft: 30 },
+  { n: 'PW', carry: 120, loft: 34 },
+  { n: 'SW', carry: 85, loft: 44 },
 ];
-const GRAV = 10.7;              // yd/s^2
+const GRAV = 9.6;               // yd/s^2 (FC-5: paired with DRAG_K — driver hang +25%)
+const DRAG_K = 0.0032;          // quadratic air drag coeff (yd^-1) on the ball in flight
 const WIND_K = 0.085;           // wind mph -> yd/s^2 accel on ball in flight
+/* flat-ground carry for a launch speed v at loft — the tickBall fly
+   integrator verbatim (DT, semi-implicit order, drag), minus wind/terrain */
+function flatCarry(v0, loftRad) {
+  let y = 0.2, z = 0;
+  let vz = Math.cos(loftRad) * v0, vy = Math.sin(loftRad) * v0;
+  for (let i = 0; i < 3600; i++) {
+    const sp = Math.hypot(vz, vy);
+    vy -= (GRAV + DRAG_K * sp * vy) * DT;
+    vz -= DRAG_K * sp * vz * DT;
+    z += vz * DT; y += vy * DT;
+    if (y <= 0 && vy < 0) break;
+  }
+  return z;
+}
+/* per-club (carry -> launch speed) curves, solved once at boot */
+for (const c of CLUBS) {
+  const loft = c.loft * Math.PI / 180;
+  let lo = 4, hi = 400;
+  for (let i = 0; i < 42; i++) {
+    const mid = (lo + hi) / 2;
+    if (flatCarry(mid, loft) < c.carry) lo = mid; else hi = mid;
+  }
+  const vMax = (lo + hi) / 2;
+  const N = 25, vs = new Float64Array(N), cs = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    const v = vMax * (0.05 + 0.95 * i / (N - 1));
+    vs[i] = v; cs[i] = flatCarry(v, loft);
+  }
+  cs[N - 1] = c.carry;          // exact by construction at 100%
+  c.vTab = vs; c.cTab = cs;
+}
+function clubV(c, carry) {
+  const cs = c.cTab, vs = c.vTab;
+  if (carry <= cs[0]) return vs[0] * Math.sqrt(Math.max(0.05, carry / cs[0]));
+  for (let i = 1; i < cs.length; i++) {
+    if (carry <= cs[i]) {
+      const t = (carry - cs[i - 1]) / (cs[i] - cs[i - 1] || 1);
+      return vs[i - 1] + (vs[i] - vs[i - 1]) * t;
+    }
+  }
+  return vs[vs.length - 1];
+}
 
 /* ── the 18 hole records — Magnolia National ──
    Centerline: tee at origin, opening direction +Z; bend = [[frac, deg], ...]
@@ -114,9 +163,13 @@ const WIND_K = 0.085;           // wind mph -> yd/s^2 accel on ball in flight
    bunkers: [d, off, rx, rz].  water: {t:'pond'|'creek', ...}.
    fw: fairway halfwidth.  tclump: extra tree clumps [d, off, r, n].       */
 const HOLES = [
+  /* FC-5: club: [d, off] plants THE clubhouse (cupola + veranda + live oak)
+     on the holes that see it (1 tee, 9 green, 18 approach); cabins: true
+     plants the two white cabins by the 10th tee; creeks get stone bridges
+     automatically (12/13 — the Hogan/Nelson homage). */
   { n: 1, name: 'Tea Olive', par: 4, yds: 445, bend: [[0.56, 24]], fw: 15,
     elv: [[0, 0], [0.5, 1.5], [1, 4.5]],
-    bunkers: [[295, 22, 13, 9]], water: [],
+    bunkers: [[295, 22, 13, 9]], water: [], club: [64, -40],
     green: { r: 12, sx: -0.018, sz: -0.014 },
     tclump: [[250, 40, 26, 16], [355, -34, 24, 12]] },
   { n: 2, name: 'Pink Dogwood', par: 5, yds: 575, bend: [[0.52, -20]], fw: 17,
@@ -150,11 +203,11 @@ const HOLES = [
     green: { r: 12, sx: -0.012, sz: -0.016 }, tclump: [[430, -30, 24, 12]] },
   { n: 9, name: 'Carolina Cherry', par: 4, yds: 460, bend: [[0.45, -14]], fw: 15,
     elv: [[0, 0], [0.45, -5], [1, 2]],
-    bunkers: [[420, -16, 11, 8], [438, -18, 10, 7]], water: [],
+    bunkers: [[420, -16, 11, 8], [438, -18, 10, 7]], water: [], club: [490, 12],
     green: { r: 11, sx: 0.014, sz: 0.03 }, tclump: [[240, -34, 22, 12]] },
   { n: 10, name: 'Camellia', par: 4, yds: 495, bend: [[0.4, -22]], fw: 16,
     elv: [[0, 0], [0.5, -9], [1, -16]],
-    bunkers: [[330, 18, 13, 9]], water: [],
+    bunkers: [[330, 18, 13, 9]], water: [], cabins: true,
     green: { r: 13, sx: -0.016, sz: 0.014 }, camellia: true, tclump: [[230, -38, 28, 16]] },
   { n: 11, name: 'White Dogwood', par: 4, yds: 520, bend: [[0.5, -8]], fw: 16,
     elv: [[0, 0], [0.4, -4], [1, -10]],
@@ -194,7 +247,8 @@ const HOLES = [
   { n: 18, name: 'Holly', par: 4, yds: 465, bend: [[0.55, 26]], fw: 14,
     elv: [[0, 0], [0.55, 2], [1, 7]],
     bunkers: [[252, 16, 11, 8], [268, 20, 10, 7], [438, -13, 9, 7], [452, 12, 9, 7]],
-    water: [], green: { r: 12, sx: -0.014, sz: -0.018 }, gallery: true,
+    water: [], club: [494, -16],
+    green: { r: 12, sx: -0.014, sz: -0.018 }, gallery: true,
     tclump: [[260, 44, 26, 16]] },
 ];
 

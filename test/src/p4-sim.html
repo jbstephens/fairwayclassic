@@ -78,7 +78,7 @@ function launchShot(p, power) {
   const mul = lieMul(p.lie);
   const carry = Math.max(3, c.carry * mul * power);
   const loft = c.loft * Math.PI / 180;
-  const v = Math.sqrt(carry * GRAV / Math.sin(2 * loft));
+  const v = clubV(c, carry);        // FC-5: numeric solve — carry table exact under drag
   let ang = SHOT.aimAng;
   if (DIFF === 'pro') ang += (Math.random() - 0.5) * 2 * (power * power) * 0.05;   // ~±2.9 deg at full power
   if (p.lie === 0) ang += (Math.random() - 0.5) * 0.05;
@@ -127,9 +127,12 @@ function tickBall() {
   if (!FLIGHT.on) return null;
   FLIGHT.t += DT;
   if (FLIGHT.mode === 'fly') {
-    FLIGHT.vy -= GRAV * DT;
-    FLIGHT.vx += WIND.ax * DT;
-    FLIGHT.vz += WIND.az * DT;
+    // FC-5 tracer arc: gravity + quadratic air drag (see flatCarry — the
+    // per-club launch-speed solver integrates THESE exact lines)
+    const spD = Math.hypot(FLIGHT.vx, FLIGHT.vy, FLIGHT.vz);
+    FLIGHT.vy -= (GRAV + DRAG_K * spD * FLIGHT.vy) * DT;
+    FLIGHT.vx += (WIND.ax - DRAG_K * spD * FLIGHT.vx) * DT;
+    FLIGHT.vz += (WIND.az - DRAG_K * spD * FLIGHT.vz) * DT;
     FLIGHT.x += FLIGHT.vx * DT;
     FLIGHT.y += FLIGHT.vy * DT;
     FLIGHT.z += FLIGHT.vz * DT;
@@ -246,7 +249,7 @@ function simulateArc(p) {
     const mul = lieMul(p.lie);
     const carry = Math.max(3, c.carry * mul);
     const loft = c.loft * Math.PI / 180;
-    const v = Math.sqrt(carry * GRAV / Math.sin(2 * loft));
+    const v = clubV(c, carry);      // SHARED with launchShot — preview == flight
     let x = p.ball.x, y = p.ball.y + 0.2, z = p.ball.z;
     let vx = Math.sin(SHOT.aimAng) * Math.cos(loft) * v;
     let vz = Math.cos(SHOT.aimAng) * Math.cos(loft) * v;
@@ -254,7 +257,10 @@ function simulateArc(p) {
     const dt = 1 / 30;
     const samples = [];
     for (let i = 0; i < 400; i++) {
-      vy -= GRAV * dt; vx += WIND.ax * dt; vz += WIND.az * dt;
+      const spD = Math.hypot(vx, vy, vz);
+      vy -= (GRAV + DRAG_K * spD * vy) * dt;
+      vx += (WIND.ax - DRAG_K * spD * vx) * dt;
+      vz += (WIND.az - DRAG_K * spD * vz) * dt;
       x += vx * dt; y += vy * dt; z += vz * dt;
       samples.push(x, y, z);
       if (vy < 0 && y <= groundH(x, z)) { land = [x, groundH(x, z), z]; break; }
