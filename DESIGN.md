@@ -251,3 +251,49 @@ Art rebuilds with that pipeline:
   undercounts under shadow maps — PP law). Shadow-caster subset ≤~30k
   tris. 60fps on the Pi is still the law; `?fx=low` additionally drops
   the shadow map to blob shadows + halves sprites/particles.
+
+# FC-5 — feel & fidelity bundle (locked 2026-09-19, John's list)
+
+Decided — implement as written, tune numbers for fun.
+
+1. MINIMAP AIM BUG: aiming right moves the map marker LEFT — reversed.
+   Fix: with the map oriented tee-bottom→green-top, aim-right must move
+   the aim line/landing marker right. Extend test/aim-direction.mjs with
+   a minimap-space assertion (same law, map space).
+2. MINIMAP ZOOM: inside ~120 yds to the pin, the map zooms to a padded
+   window around ball→green; on the green it zooms to the green alone
+   (putt line + slope arrows visible). Smooth-eased rescale on state
+   change; redraws stay event-driven.
+3. PUTTER ANYWHERE: club cycle includes the putter from any turf lie
+   (fairway/fringe/rough); bunkers keep the loft-out restriction; water
+   drops obviously don't. Auto-suggest logic unchanged (putter auto only
+   on green) — free selection just stops overshooting from the fringe.
+4. BALL SIZE: comically large today — shrink to reads-as-a-golf-ball
+   (roughly half current visual diameter), still visible at address,
+   in flight, and on the green at couch distance. Blob shadow scales.
+5. SWING DIRECTION BUG: the club travels the wrong way (goes "backwards"
+   through impact). Correct sequence, screenshot-verified: backswing
+   raises club AWAY from the target behind the golfer, downswing sweeps
+   THROUGH the ball TOWARD the target, follow-through wraps high on the
+   target side.
+6. CADDIE: the bag gets a caddie — Augusta look: white boiler-suit
+   jumpsuit, green cap, dark skin tone default with per-player-slot
+   variation, bag strapped over the shoulder. Stands relaxed near the
+   golfer at address (small idle sway), PP-LOOK-3 low-poly style
+   (~400–600 tris, merged). Shadow caster.
+7. FLIGHT FEEL: real loft — raise per-club launch (driver ~13°, woods
+   ~16°, mid-irons ~20–24°, wedges steeper), higher apex, ~25% longer
+   hang time, same carry table (rebalance speed/gravity/drag so carries
+   land within ±5 yds of the club table). Arc preview and flight share
+   the sim, so the preview follows automatically — assert they still
+   match. The shot should feel like a broadcast tracer, not a line drive.
+8. PUTT STROKE: putting uses a short pendulum stroke animation (no
+   backswing wrap, no follow-through wrap), amplitude scaled to meter
+   power.
+9. THE CLUBHOUSE (bonus): the white clubhouse with its cupola + veranda
+   visible from hole 1 tee, 9 green, and the 18 fairway/green approach;
+   two white cabins near 10 tee; low stone bridges over the creek at 12
+   and 13 (Hogan/Nelson homage). Merged baked geometry, a few k tris,
+   present only in the holes that see them; big live oak by the
+   clubhouse. Clubhouse also framed in the title beauty shot if cheap
+   (title stays hole 12 otherwise).
