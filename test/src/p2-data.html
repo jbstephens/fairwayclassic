@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-5-FEEL';
+const BUILD_TAG = 'FC-6-BIRDSEED';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -538,6 +538,21 @@ const SFX = {
     tone(78, t, 0.12, 0.13, 'sine', 52);
     noiseBurst(t, 0.14, 0.18, 420, 230, 0.9, 'lowpass');
     noiseBurst(t + 0.015, 0.16, 0.1, 1900, 950, 1.4); },
+  // birdseed beat: dry seeds scattering into the cup
+  seeds() { if (!AC) return; const t = AC.currentTime;
+    noiseBurst(t, 0.11, 0.09, 4300, 2700, 1.5);
+    for (let i = 0; i < 6; i++)
+      noiseBurst(t + 0.03 + i * 0.032 + Math.random() * 0.012, 0.012, 0.045, 5200, 3900, 2.6, 'highpass'); },
+  // birdseed beat: warm cardinal warble — glided sine pair, detuned per call
+  chirp() { if (!AC) return; const t = AC.currentTime;
+    const d = 1 + (Math.random() - 0.5) * 0.07;
+    tone(2350 * d, t, 0.07, 0.055, 'sine', 3150 * d);
+    tone(3080 * d, t + 0.1, 0.05, 0.045, 'sine', 2450 * d);
+    tone(2600 * d, t + 0.2, 0.09, 0.045, 'sine', 3450 * d); },
+  // birdseed beat: soft wing flutter — rapid low-passed puffs
+  flutter() { if (!AC) return; const t = AC.currentTime;
+    for (let i = 0; i < 6; i++)
+      noiseBurst(t + i * 0.055, 0.026, 0.05, 950, 520, 0.8, 'lowpass'); },
   bounce() { if (!AC) return; const t = AC.currentTime;
     tone(130, t, 0.04, 0.05, 'sine', 85);
     noiseBurst(t, 0.025, 0.05, 800, 480, 1.2); },

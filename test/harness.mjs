@@ -307,11 +307,19 @@ async function partA() {
       }
       await lockMeterAt(page, 46);
       if (birdiePutt) {
-        // catch the celebration beat itself: banner + confetti + flag flutter
+        // FC-6: the birdseed beat — golfer walks up, sprinkles seed, a
+        // cardinal drops in.  Witness it, screenshot the bird, then let it
+        // play out into the usual party.
         await page.waitFor(`__fc.players()[0].holed`, 'birdie drops', 15000).catch(() => {});
-        await sleep(600);
+        await page.waitFor(`__fc.state()==='birdiecin'`, 'birdseed beat starts', 4000);
+        await page.waitFor(`__fc.cin() >= 2.0`, 'sprinkle beat reached', 8000);
+        await page.waitFor(`__fc.birdVisible()`, 'the cardinal arrives', 6000);
+        ok(true, 'birdie triggers the birdseed cinematic (walk, sprinkle, bird)');
+        await page.waitFor(`__fc.cin() >= 4.0 || __fc.state()!=='birdiecin'`, 'bird pecking', 6000);
         await page.screenshot(path.join(SHOTS, 'celebration.png'));
         await sampleBudget(page, 'celebration');
+        await page.waitFor(`__fc.state()!=='birdiecin'`, 'beat ends on its own', 12000);
+        ok((await page.eval(`__fc.birdVisible()`)) === false, 'the cardinal leaves when the beat ends');
       }
       await waitShotDone(page);
     }
