@@ -297,3 +297,49 @@ Decided — implement as written, tune numbers for fun.
    present only in the holes that see them; big live oak by the
    clubhouse. Clubhouse also framed in the title beauty shot if cheap
    (title stays hole 12 otherwise).
+
+# FC-7 — the Augusta sauce: terrain drama (locked 2026-09-20)
+
+John (via a ChatGPT consult he endorsed): Augusta in plan view is "long
+corridors with modest bends" — the personality is 3D. "Preserve
+Augusta's real overhead routing, but exaggerate/accurately model
+elevation, lateral fairway slopes, green contours, strategic bunkering,
+and landing-area widths." Do NOT make holes bendier. Decided —
+implement as written. Build + verify with OPUS agents (John's call).
+
+1. ELEVATION DRAMA (per-hole profiles, the real course, exaggerated for
+   feel but camera-comfortable): 10 = the huge sweeping downhill (~30 yd
+   drop); 9/18 = uphill finishes to elevated greens; 6 = high tee over a
+   valley; 2 = long downhill; 8 = uphill climb; 1 = rise to a crest then
+   down; Amen Corner sits low along the creek. Tee boxes and greens as
+   built pads (flat-ish) in sloped land.
+2. LATERAL LIFE: fairways crowned/tilted (10 cants left, 13 cants hard
+   right-to-left toward the creek, 17 ridge); rough shoulders that
+   funnel or repel; mounding around greens.
+3. ROLL PHYSICS FOLLOWS THE GROUND: on fairway/rough/green the bounce
+   and roll respond to the local gradient (downhill runs out, sidehill
+   kicks toward the low side, uphill kills). Fairway funneling must be
+   REAL — a drive up 10's right side feeds left off the cant. Roll must
+   always terminate (no infinite creep guard).
+4. SIDEHILL LIES (lite, instructive): when the ball sits on a cant, HUD
+   shows "BALL ABOVE FEET — drifts left" (etc.); the shot gets a small
+   lateral bias the aim arc INCLUDES (arc = truth, always). Severity
+   capped kid-friendly; Pro slightly stronger.
+5. ELEVATION-AWARE CARRY: shots to lower ground fly farther, uphill
+   shorter (physics already lands on the real terrain — surface the FACT
+   in the HUD: "153 YDS ▼18" and let the suggested club account for it).
+6. GREEN COMPLEXES: greens angled to the approach line (12 shallow +
+   diagonal, 14 terraced tiers, 9 false front that sheds short balls,
+   16 hard right-to-left feeder — a ball landing right trickles toward
+   the Sunday pin). Multi-lobe contour fields per green record; putt sim
+   + green-read arrows + zoomed minimap all read the same field.
+7. STRATEGY DATA PASS: bunker positions moved to guard real landing
+   zones and green angles; landing areas width-varied (tight where the
+   reward is, generous bailouts); records stay data-driven.
+8. LAWS: aim arc and flight share one sim (arc shows the sloped-lie
+   bias and elevation); carry table integrity ON FLAT GROUND unchanged;
+   one-ground-authority (rendered mesh = physics groundH) holds; flyover
+   choreography unchanged (it'll showcase the terrain free); budgets
+   unchanged (≤80 true calls, ≤75k target tris, casters curated, bake
+   sweep under ~350 ms desktop); 60fps kiosk law; ?look=0 / ?fx=low keep
+   working; every existing suite stays green, extended not replaced.
