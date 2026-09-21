@@ -313,10 +313,11 @@ function disposeHole() {
   treeCaster = null;
 }
 
-/* elevation profile: [[frac, yds]] control points, smoothstep between */
-function elevAt(H, d) {
-  const f = clamp(d / H.len, 0, 1);
-  const e = H.elv;
+/* profile interpolator: [[frac, value]] control points, smoothstep between.
+   Shared by the elevation, cant and fairway-width profiles (FC-7). */
+function profAt(e, f) {
+  if (!e || !e.length) return 0;
+  f = clamp(f, 0, 1);
   for (let i = 0; i < e.length - 1; i++) {
     if (f <= e[i + 1][0] || i === e.length - 2) {
       const t = smoothstep((f - e[i][0]) / (e[i + 1][0] - e[i][0] || 1));
@@ -325,12 +326,29 @@ function elevAt(H, d) {
   }
   return e[e.length - 1][1];
 }
+/* elevation profile: [[frac, yds]] control points, smoothstep between */
+function elevAt(H, d) { return profAt(H.elv, d / H.len); }
+/* FC-7 lateral cant: yd of rise per yd to the RIGHT of play.  Positive tips
+   the fairway toward the player's LEFT, so the right half FEEDS LEFT. */
+function cantAt(H, d) { return H.cant ? profAt(H.cant, d / H.len) : 0; }
+/* FC-7 landing-area width profile (fairway halfwidth, yds): tight where the
+   reward is, generous bailouts.  Falls back to the flat H.fw. */
+function fwAt(H, d) { return H.fwv ? profAt(H.fwv, d / H.len) : H.fw; }
 
 /* the whole-hole analytic field: height + surface + color in one pass */
 function makeHoleField(H) {
   const gp = clPoint(H, H.len);
-  const gx = gp[0], gz = gp[1], gtx = gp[2], gtz = gp[3];   // green center + approach dir
+  const gx = gp[0], gz = gp[1];
   const g = H.green;
+  /* FC-7: the green complex is ANGLED to the approach line (+ang turns its
+     long axis to the right of the approach — 12 is the shallow diagonal).
+     Rotating the green frame rotates everything downstream of it for free:
+     the surface field, the putt sim, the read arrows, the minimap ellipse
+     and the green-read camera all live in this one frame. */
+  const ga = (g.ang || 0) * Math.PI / 180;
+  const gca = Math.cos(ga), gsa = Math.sin(ga);
+  const gtx = gp[2] * gca + gp[3] * gsa;
+  const gtz = gp[3] * gca - gp[2] * gsa;
   const grx = g.r * (g.gex || 1), grz = g.r * (g.gex ? 0.55 : 1);
   const gh = elevAt(H, H.len);
   GREEN = { x: gx, z: gz, grx, grz, tx: gtx, tz: gtz, h: gh, sx: g.sx, sz: g.sz, r: g.r };
@@ -341,13 +359,16 @@ function makeHoleField(H) {
     return { x: w[0], z: w[1], rx: b[2], rz: b[3], tx: p[2], tz: p[3] };
   });
   const wat = H.water.map(w => {
+    /* FC-7: on land that now really falls, a pool sits at the LOW end of
+       its own footprint — levelling it at the middle station floods the
+       upstream bank (the 16th pond climbed its own shore). */
     if (w.t === 'pond') {
       const c = clWorld(H, w.d, w.off);
       const p = clPoint(H, w.d);
-      const wl = elevAt(H, w.d) - 0.55;
+      const wl = Math.min(elevAt(H, w.d), elevAt(H, w.d - w.rz), elevAt(H, w.d + w.rz)) - 0.6;
       return { t: 'pond', x: c[0], z: c[1], rx: w.rx, rz: w.rz, tx: p[2], tz: p[3], wl };
     }
-    const wl = elevAt(H, w.d) - 0.55;
+    const wl = Math.min(elevAt(H, w.d), elevAt(H, w.d + w.w), elevAt(H, w.d - w.w)) - 0.6;
     return { t: 'creek', d: w.d, w: w.w, wl };
   });
   for (const w of wat) WATERS.push(w);
@@ -375,6 +396,30 @@ function makeHoleField(H) {
     const rr = Math.hypot(lx / b.rx, lz / b.rz);
     return clamp((1 - rr) * 3 + 1, 0, 1);
   }
+  /* ═══ FC-7 THE GREEN COMPLEX SURFACE ═══
+     plane + multi-lobe contour field + terraces + a false front, in green
+     local yards (lat = right of the approach, along = toward the back).
+     This is the ONLY place a green's shape is written down: the terrain
+     mesh, groundH (physics), the putt sim, the green-read arrows and the
+     zoomed minimap all resolve through it. */
+  const gLobes = g.lobes || null, gTiers = g.tiers || null, gFF = g.ffront || null;
+  function greenPlane(lat, along) {
+    let h = gh + g.sx * lat + g.sz * along;
+    if (gLobes) for (let i = 0; i < gLobes.length; i++) {
+      const L = gLobes[i];
+      const dx = lat - L[0], dz = along - L[1];
+      const t2 = (dx * dx + dz * dz) / (L[2] * L[2]);
+      if (t2 < 1) { const k = 1 - t2; h += L[3] * k * k; }   // C1 at the rim
+    }
+    if (gTiers) for (let i = 0; i < gTiers.length; i++) {
+      const T = gTiers[i];
+      h += T[3] * smoothstep((lat * T[0] + along * T[1] - T[2]) / T[4] + 0.5);
+    }
+    // the false front: everything in front of `at` falls away down the hill
+    if (gFF && along < gFF.at) h -= gFF.drop * clamp((gFF.at - along) / gFF.w, 0, gFF.ext);
+    return h;
+  }
+  const gMound = g.mound === undefined ? 1.1 : g.mound;
   /* height + classification.  out = [h, surfCode]
      surf: 0 rough, 1 fairway, 2 green, 3 fringe, 4 sand, 5 water, 6 tee */
   const _out = [0, 0];
@@ -382,20 +427,44 @@ function makeHoleField(H) {
     const dof = clDoff(H, x, z);
     const d = dof[0], off = dof[1], away = Math.abs(off);
     let h = elevAt(H, d);
-    h += vnoise(x * 0.045, z * 0.045) * (0.22 + smoothstep((away - H.fw - 4) / 26) * 1.5);
+    /* ── FC-7 LATERAL LIFE ── crowned/canted fairways + funnelling shoulders.
+       u = lateral position normalised to the corridor halfband; clamping it
+       stops the tilt running away in the deep rough. */
+    const fwH = H.fw > 0 ? fwAt(H, d) : 10;
+    const bw = fwH + 16;
+    const u = clamp(off / bw, -1.7, 1.7);
+    h += cantAt(H, d) * u * bw;                 // the cant (right-side rise)
+    h -= (H.crown || 0) * u * u;                // crown: the line rides high
+    if (H.funnel) {                             // shoulders tip back to the short grass
+      const a = Math.max(0, Math.abs(u) - 0.72);
+      h += H.funnel * a * a * 2.6;
+    }
+    h += vnoise(x * 0.045, z * 0.045) * (0.22 + smoothstep((away - fwH - 4) / 26) * 1.5);
     h += smoothstep((away - 46) / 24) * 3.2;
     let surf = 0;
-    if (H.fw > 0 && away < H.fw && d > 8 && d < H.len - grz * 0.5) surf = 1;
-    if (d < 12 && away < 7) { surf = 6; h = elevAt(H, 0); }
-    // green plateau
+    if (H.fw > 0 && away < fwH && d > 8 && d < H.len - grz * 0.5) surf = 1;
+    // FC-7: the tee is a BUILT PAD — flat-ish, benched into whatever the
+    // land does around it (6 needs it most: the world falls off the front)
+    const teeT = smoothstep((16 - d) / 9) * smoothstep((11 - away) / 6);
+    if (teeT > 0.002) {
+      h = lerp(h, elevAt(H, 0), teeT);
+      if (teeT > 0.6) surf = 6;
+    }
+    // green plateau — likewise a built pad, with its complex on top
     greenLoc(x, z, _gl);
     const rr = Math.hypot(_gl[0] / (grx + 7), _gl[1] / (grz + 7));
     if (rr < 1.15) {
-      const plane = gh + g.sx * _gl[0] + g.sz * _gl[1];
+      const plane = greenPlane(_gl[0], _gl[1]);
       h = lerp(h, plane, smoothstep((1.15 - rr) / 0.3));
       const rrT = Math.hypot(_gl[0] / grx, _gl[1] / grz);
       if (rrT < 1) surf = 2;
       else if (rrT < 1.3) surf = 3;
+    } else if (gMound && rr < 2.1) {
+      // FC-7: mounding rings the complex — the collection hollows and humps
+      // that make a miss interesting instead of merely long.  The ramps are
+      // deliberately broad: a 4-foot hump you can roll over, never a crater
+      // rim (a steep ring reads as a bowl and traps the ball at the lip).
+      h += gMound * smoothstep((rr - 1.15) / 0.42) * (1 - smoothstep((rr - 1.6) / 0.5));
     }
     // bunkers: depression + sand
     for (let i = 0; i < bunk.length; i++) {
@@ -417,6 +486,7 @@ function makeHoleField(H) {
     return _out;
   }
   field.greenLoc = greenLoc;
+  field.greenPlane = greenPlane;
   field.wat = wat;
   field.bunk = bunk;
   field.bunkMask = bunkMask;
@@ -845,7 +915,8 @@ function buildHole(idx) {
   for (let d = 14; d < H.len + 6; d += 6.5) {
     for (const side of [-1, 1]) {
       if (rng() < 0.22) continue;
-      const off = side * ((H.chute ? H.fw + 9 : Math.max(H.fw + 13, 21)) + rng() * 34);
+      const fwD = fwAt(H, d);   // FC-7: the tree line follows the varied width
+      const off = side * ((H.chute ? fwD + 9 : Math.max(fwD + 13, 21)) + rng() * 34);
       const w = clWorld(H, d + (rng() - 0.5) * 5, off);
       if (safeSpot(w[0], w[1], 14)) {
         if (rng() < decidP) blobTree(w[0], w[1], 0.85 + rng() * 0.5, decidA, decidB);
@@ -914,7 +985,7 @@ function buildHole(idx) {
     }, 1.9, 3.9);
     bank(AZ, 60, () => {
       const d = H.len * (0.12 + rng() * 0.86);
-      const off = (rng() < 0.5 ? -1 : 1) * (H.fw + 4 + rng() * 11);
+      const off = (rng() < 0.5 ? -1 : 1) * (fwAt(H, d) + 4 + rng() * 11);
       return clWorld(H, d, off).slice();
     }, 1.6, 3.4);
   }
@@ -928,7 +999,7 @@ function buildHole(idx) {
     }, 1.7, 3.2);
     for (let k = 0; k < 7; k++) {
       const d = H.len * (0.5 + rng() * 0.45);
-      const w = clWorld(H, d, (rng() < 0.5 ? -1 : 1) * (H.fw + 10 + rng() * 12));
+      const w = clWorld(H, d, (rng() < 0.5 ? -1 : 1) * (fwAt(H, d) + 10 + rng() * 12));
       if (plantable(w[0], w[1])) blobTree(w[0], w[1], 0.6 + rng() * 0.35, C_DOGWOOD, C_DOGWOOD2);
     }
   }
@@ -942,14 +1013,14 @@ function buildHole(idx) {
     }, 1.6, 3.0);
     bank(CM, 22, () => {
       const d = H.len * (0.35 + rng() * 0.6);
-      return clWorld(H, d, (rng() < 0.5 ? -1 : 1) * (H.fw + 6 + rng() * 12)).slice();
+      return clWorld(H, d, (rng() < 0.5 ? -1 : 1) * (fwAt(H, d) + 6 + rng() * 12)).slice();
     }, 1.3, 2.6);
   }
   // pampas hole (7): tan plume tufts lining the tight chute
   if (H.pampas) {
     for (let k = 0; k < 30; k++) {
       const d = 20 + rng() * (H.len - 60);
-      const w = clWorld(H, d, (rng() < 0.5 ? -1 : 1) * (H.fw + 4 + rng() * 7));
+      const w = clWorld(H, d, (rng() < 0.5 ? -1 : 1) * (fwAt(H, d) + 4 + rng() * 7));
       if (!plantable(w[0], w[1])) continue;
       const y = groundH(w[0], w[1]) - 0.2;
       const s = 0.7 + rng() * 0.5;
@@ -966,11 +1037,11 @@ function buildHole(idx) {
     for (const side of [-1, 1]) {
       for (let k = 0; k < 44; k++) {
         const d = 46 + k * 9 + rng() * 3;
-        const w = clWorld(H, d, side * (H.fw + 5 + rng() * 2.5));
+        const w = clWorld(H, d, side * (fwAt(H, d) + 5 + rng() * 2.5));
         if (!plantable(w[0], w[1])) continue;
         moundW(sc, w[0], groundH(w[0], w[1]) - 0.3, w[1], 1.2 + rng() * 0.7, 0.7, C_BOXWOOD, rng, true);
         if (k % 3 === 0) {
-          const f = clWorld(H, d + 3, side * (H.fw + 9 + rng() * 3));
+          const f = clWorld(H, d + 3, side * (fwAt(H, d) + 9 + rng() * 3));
           if (plantable(f[0], f[1])) moundW(sc, f[0], groundH(f[0], f[1]) - 0.3, f[1], 0.9 + rng() * 0.6, 0.8, [C_BED_Y, C_BED_R, C_AZALEA2][k % 3 === 0 ? (k / 3 | 0) % 3 : 0], rng, false);
         }
       }
@@ -1028,8 +1099,39 @@ function buildHole(idx) {
   }
 
   // ── pin: cup + flagstick + cloth; tee markers ──
+  /* FC-7: greens have real contour now, so the cup is either HAND-SET where
+     the complex is the whole point (9's back shelf above the false front,
+     16's Sunday pin at the bottom of the feeder, 14's top terrace, 12's
+     diagonal right), or chosen as the gentlest of a deterministic handful
+     of candidate shelves — a fair hole location, same every time. */
   const rngP = mulberry32(55 + idx * 31);
-  const pox = (rngP() - 0.5) * GREEN.grx * 0.5, poz = (rngP() - 0.5) * GREEN.grz * 0.5;
+  let pox, poz;
+  if (H.green.pin) {
+    pox = H.green.pin[0]; poz = H.green.pin[1];
+  } else {
+    const gradAt = (wx, wz) => Math.hypot(
+      (groundH(wx + 1, wz) - groundH(wx - 1, wz)) / 2,
+      (groundH(wx, wz + 1) - groundH(wx, wz - 1)) / 2);
+    let best = null;
+    for (let k = 0; k < 24; k++) {
+      const lx = (rngP() - 0.5) * GREEN.grx * 1.1, lz = (rngP() - 0.5) * GREEN.grz * 1.1;
+      if (Math.hypot(lx / GREEN.grx, lz / GREEN.grz) > 0.6) continue;
+      const wx = GREEN.x + GREEN.tz * lx + GREEN.tx * lz;
+      const wz = GREEN.z - GREEN.tx * lx + GREEN.tz * lz;
+      /* score the NEIGHBOURHOOD, not just the point: a cup cut on the crown
+         of a lobe reads flat underfoot and throws every putt off it.  The
+         worst gradient on a 2.2-yd ring is what the player actually putts
+         through. */
+      let ring = 0;
+      for (let a = 0; a < 8; a++) {
+        const th = TAU * a / 8;
+        ring = Math.max(ring, gradAt(wx + Math.cos(th) * 2.2, wz + Math.sin(th) * 2.2));
+      }
+      const s = ring + gradAt(wx, wz) * 0.6;
+      if (!best || s < best.s) best = { s, lx, lz };
+    }
+    pox = best ? best.lx : 0; poz = best ? best.lz : 0;
+  }
   PIN.x = GREEN.x + GREEN.tz * pox + GREEN.tx * poz;
   PIN.z = GREEN.z - GREEN.tx * pox + GREEN.tz * poz;
   PIN.y = groundH(PIN.x, PIN.z);
@@ -1612,20 +1714,27 @@ function drawMapBase(H) {
   c.beginPath();
   if (c.roundRect) c.roundRect(0, 0, W2, H2, 6); else c.rect(0, 0, W2, H2);
   c.fill();
-  // fairway ribbon: stroke the centerline with the fairway width
+  /* fairway ribbon — FC-7: a filled polygon of the two EDGES, so the
+     varied landing-area widths (tight where the reward is, generous
+     bailouts) read on the map exactly as they play */
   if (H.fw > 0) {
-    c.strokeStyle = MAP_COLS.fw;
-    c.lineWidth = Math.max(5, H.fw * 2 * MAPS.s);
-    c.lineCap = 'round'; c.lineJoin = 'round';
+    const steps = 30, lo = 8, hi = H.len - 14;
+    c.fillStyle = MAP_COLS.fw;
     c.beginPath();
-    const steps = 26;
     for (let i = 0; i <= steps; i++) {
-      const d = 8 + (H.len - 14 - 8) * i / steps;
-      const w = clWorld(H, d, 0);
+      const d = lo + (hi - lo) * i / steps;
+      const w = clWorld(H, d, fwAt(H, d));
       const m = P(w[0], w[1]);
       if (i === 0) c.moveTo(m[0], m[1]); else c.lineTo(m[0], m[1]);
     }
-    c.stroke();
+    for (let i = steps; i >= 0; i--) {
+      const d = lo + (hi - lo) * i / steps;
+      const w = clWorld(H, d, -fwAt(H, d));
+      const m = P(w[0], w[1]);
+      c.lineTo(m[0], m[1]);
+    }
+    c.closePath();
+    c.fill();
   }
   // helper: rotated ellipse at world pos; rx = lateral radius, rz = along
   // radius, (tx,tz) = the along-play tangent at that station

@@ -23,16 +23,55 @@ const SHOT = {
   aimAng: 0, club: 0, putter: false,
   power: 0, meterV: 0, meterDir: 1,
   arcDirty: true, landX: 0, landZ: 0, puttMax: 20,
+  bias: 0, cross: 0,          // FC-7: the live sidehill-lie read
 };
 function meterSpeed() { return DIFF === 'pro' ? 130 : 92; }   // pct per second
 
 function distToPin(x, z) { return Math.hypot(PIN.x - x, PIN.z - z); }
+/* FC-7 elevation-aware carry: shots to lower ground fly farther, uphill
+   shorter.  The PHYSICS already does this (the ball lands on the real
+   terrain) — this is the number the HUD surfaces and the club suggestion
+   respects, so the player is told the fact instead of discovering it. */
+function pinRise(p) { return clamp(PIN.y - p.ball.y, -40, 40); }
 
-/* club auto-suggest by distance remaining (rough/sand penalty considered) */
+/* ═══ FC-7 SIDEHILL LIES (lite, instructive) ═══
+   cross = the ground's rise per yard to the RIGHT of the aim line.  The
+   golfer stands to the LEFT of the aim line (see updateVisuals), so ground
+   rising to the right puts the BALL ABOVE HIS FEET — which flattens the
+   swing and works the shot LEFT.  Below the feet pushes it right.
+   Severity is kid-capped, a touch stronger on Pro.  LAW: the AIM ARC
+   INCLUDES THE BIAS — the preview and the live shot both take their launch
+   angle from lieBias(), so what the arc shows is what the ball does. */
+const LIE_CAP = 0.2;
+const _lg = [0, 0];
+function lieCross(p) {
+  if (!CUR || SHOT.putter || p.lie === 2 || p.lie === 5) return 0;
+  ballGrad(p.ball.x, p.ball.z, _lg);
+  const rx = Math.cos(SHOT.aimAng), rz = -Math.sin(SHOT.aimAng);   // right of aim
+  return clamp(_lg[0] * rx + _lg[1] * rz, -LIE_CAP, LIE_CAP);
+}
+function lieBias(p) {
+  if (SHOT.putter) return 0;
+  const c = lieCross(p);
+  SHOT.cross = c;
+  // above the feet (c > 0) pulls LEFT = a SMALLER aim angle
+  SHOT.bias = -c * (DIFF === 'pro' ? 0.34 : 0.26);
+  return SHOT.bias;
+}
+/* the instructive HUD line (never descriptive — it says what will happen) */
+function lieText(p) {
+  if (!p || SHOT.putter || p.lie === 2) return '';
+  const c = lieCross(p);
+  if (Math.abs(c) < 0.03) return '';
+  return c > 0 ? 'BALL ABOVE FEET — drifts left' : 'BALL BELOW FEET — drifts right';
+}
+
+/* club auto-suggest by distance remaining (rough/sand penalty considered,
+   FC-7: and the elevation change to the pin) */
 function suggestClub(p) {
   if (p.lie === 2) { SHOT.putter = true; SHOT.club = 0; return; }
   SHOT.putter = false;
-  const d = distToPin(p.ball.x, p.ball.z) / lieMul(p.lie);
+  const d = (distToPin(p.ball.x, p.ball.z) + pinRise(p)) / lieMul(p.lie);
   // shortest club that still carries the distance; too far for anything = DR
   let best = 0;
   for (let i = CLUBS.length - 1; i >= 0; i--) {
@@ -79,11 +118,12 @@ function launchShot(p, power) {
   const carry = Math.max(3, c.carry * mul * power);
   const loft = c.loft * Math.PI / 180;
   const v = clubV(c, carry);        // FC-5: numeric solve — carry table exact under drag
-  let ang = SHOT.aimAng;
+  let ang = SHOT.aimAng + lieBias(p);   // FC-7: the sidehill works the shot
   if (DIFF === 'pro') ang += (Math.random() - 0.5) * 2 * (power * power) * 0.05;   // ~±2.9 deg at full power
   if (p.lie === 0) ang += (Math.random() - 0.5) * 0.05;
   if (p.lie === 4) ang += (Math.random() - 0.5) * 0.07;
   FLIGHT.on = true; FLIGHT.mode = 'fly'; FLIGHT.t = 0; FLIGHT.treeCool = 0; FLIGHT.touches = 0;
+  FLIGHT.rollT = 0;
   FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y + 0.2; FLIGHT.z = p.ball.z;
   const ch = Math.cos(loft) * v;
   FLIGHT.vx = Math.sin(ang) * ch;
@@ -98,7 +138,7 @@ function launchPutt(p, power) {
   const rollDist = Math.max(0.8, SHOT.puttMax * power);
   const mu = greenMu();
   const v0 = Math.sqrt(2 * mu * rollDist);
-  FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0;
+  FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0; FLIGHT.rollT = 0;
   FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y; FLIGHT.z = p.ball.z;
   FLIGHT.vx = Math.sin(SHOT.aimAng) * v0;
   FLIGHT.vz = Math.cos(SHOT.aimAng) * v0;
@@ -113,6 +153,34 @@ function surfMu(s) {
     case 1: case 6: return 2.6;
     case 4: return 9.0;
     default: return 6.5;
+  }
+}
+/* FC-7 — how hard the local GRADIENT pulls a rolling ball, per surface.
+   Short grass hands the ball to the contour (the green most of all);
+   rough and sand grab it.  This is what makes a drive up 10's right half
+   feed left off the cant, and a ball short of 9 shed back down. */
+function slopeK(s) {
+  switch (s) {
+    case 2: return 10.5;
+    case 3: return 7.6;
+    case 1: case 6: return 7.2;
+    case 4: return 2.4;
+    default: return 4.2;
+  }
+}
+/* …and the steepest gradient each surface can HOLD a ball on.  Gentler than
+   this and the ball rests where it lies; steeper and it keeps going, which
+   is precisely what a false front, a terrace riser and a green-feeder are.
+   Explicit numbers (not a friction ratio) so the greens read the same in
+   Amateur and Pro, and so gentle lobe contour never makes a settled ball
+   creep for five seconds. */
+function restGrad(s) {
+  switch (s) {
+    case 2: return 0.15;
+    case 3: return 0.30;
+    case 1: case 6: return 0.34;
+    case 4: return 0.8;
+    default: return 0.55;
   }
 }
 
@@ -171,8 +239,14 @@ function tickBall() {
       FLIGHT.touches = (FLIGHT.touches || 0) + 1;
       const keep = s === 2 ? (DIFF === 'pro' ? 0.17 : 0.11)
                  : s === 3 ? 0.18 : s === 0 ? 0.12 : 0.28;
-      FLIGHT.vx *= keep; FLIGHT.vz *= keep;
-      FLIGHT.vy = Math.min(3.5, -FLIGHT.vy * 0.25);
+      /* FC-7: the BOUNCE reads the ground too — land on a downslope and the
+         ball kicks on and runs; land into a rise and it stands up and dies. */
+      ballGrad(FLIGHT.x, FLIGHT.z, _gr);
+      const hsp0 = Math.hypot(FLIGHT.vx, FLIGHT.vz) || 1;
+      const gAlong = (_gr[0] * FLIGHT.vx + _gr[1] * FLIGHT.vz) / hsp0;
+      const kSlope = clamp(1 - gAlong * 2.4, 0.5, 1.85);
+      FLIGHT.vx *= keep * kSlope; FLIGHT.vz *= keep * kSlope;
+      FLIGHT.vy = Math.min(3.5, -FLIGHT.vy * 0.25 * clamp(1 + gAlong * 1.6, 0.55, 1.4));
       if (FLIGHT.vy < 1.2 || FLIGHT.touches >= 2) {
         FLIGHT.vy = 0; FLIGHT.mode = 'roll';
         return { ev: 'landed', surf: s };
@@ -183,17 +257,24 @@ function tickBall() {
     if (FLIGHT.t > 30) { FLIGHT.on = false; return { ev: 'stopped' }; }   // failsafe
     return null;
   }
-  // rolling
+  /* ── rolling: THE BALL FOLLOWS THE GROUND (FC-7) ──
+     downhill runs out, sidehill kicks to the low side, uphill kills it. */
   const g = groundH(FLIGHT.x, FLIGHT.z);
   FLIGHT.y = g;
   const s = surfAt(FLIGHT.x, FLIGHT.z);
   if (s === 5) return waterIn();
   ballGrad(FLIGHT.x, FLIGHT.z, _gr);
-  const slopeK = s === 2 ? 10.5 : 5.0;
-  FLIGHT.vx -= _gr[0] * slopeK * DT;
-  FLIGHT.vz -= _gr[1] * slopeK * DT;
+  const sk = slopeK(s);
+  FLIGHT.vx -= _gr[0] * sk * DT;
+  FLIGHT.vz -= _gr[1] * sk * DT;
   const sp = Math.hypot(FLIGHT.vx, FLIGHT.vz);
-  const mu = surfMu(s);
+  /* TERMINATION LAW: a ball on a real cant must ALWAYS come to rest.  Past
+     5 s of rolling the turf grabs progressively; 11 s is a hard stop.  No
+     infinite creep down a tilted fairway, ever. */
+  FLIGHT.rollT = (FLIGHT.rollT || 0) + DT;
+  const grab = FLIGHT.rollT > 5 ? 1 + (FLIGHT.rollT - 5) * 1.2 : 1;
+  let mu = surfMu(s);
+  mu *= grab;
   if (sp > 0.0001) {
     const dec = Math.min(sp, mu * DT * (1 + sp * 0.06));
     FLIGHT.vx -= FLIGHT.vx / sp * dec;
@@ -214,7 +295,16 @@ function tickBall() {
     FLIGHT.vx *= 0.55; FLIGHT.vz *= 0.55;
     SFX.bounce();
   }
-  if (sp2 < 0.32) {
+  /* A ball only RESTS where the ground lets it: if the local gradient can
+     still beat the turf, it keeps going (this is what makes 9's false
+     front shed, 14's terrace risers reject a ball, and 16's feeder feed).
+     The rollT friction ramp above guarantees that always terminates, and
+     11 s is the hard floor. */
+  if (FLIGHT.rollT > 11) { FLIGHT.on = false; return { ev: 'stopped', surf: s }; }
+  // the same `grab` relaxes what counts as restable ground — otherwise a
+  // ball on a feeder slope can be damped to a crawl it is never allowed to
+  // stop from, and only the 11 s hard floor ends it
+  if (sp2 < 0.32 && Math.hypot(_gr[0], _gr[1]) < restGrad(s) * grab) {
     FLIGHT.on = false;
     return { ev: 'stopped', surf: s };
   }
@@ -250,13 +340,18 @@ function simulateArc(p) {
     const carry = Math.max(3, c.carry * mul);
     const loft = c.loft * Math.PI / 180;
     const v = clubV(c, carry);      // SHARED with launchShot — preview == flight
+    /* FC-7 arc = truth: the SAME sidehill bias the shot will get, the SAME
+       integrator step as tickBall (DT, not a coarse preview dt), and the
+       SAME terrain query — so the arc lands where the ball lands, on a
+       cant and into a 30-yard elevation change alike. */
+    const ang = SHOT.aimAng + lieBias(p);
     let x = p.ball.x, y = p.ball.y + 0.2, z = p.ball.z;
-    let vx = Math.sin(SHOT.aimAng) * Math.cos(loft) * v;
-    let vz = Math.cos(SHOT.aimAng) * Math.cos(loft) * v;
+    let vx = Math.sin(ang) * Math.cos(loft) * v;
+    let vz = Math.cos(ang) * Math.cos(loft) * v;
     let vy = Math.sin(loft) * v;
-    const dt = 1 / 30;
+    const dt = DT;
     const samples = [];
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 900; i++) {
       const spD = Math.hypot(vx, vy, vz);
       vy -= (GRAV + DRAG_K * spD * vy) * dt;
       vx += (WIND.ax - DRAG_K * spD * vx) * dt;
@@ -282,11 +377,11 @@ function simulateArc(p) {
       let v0 = Math.sqrt(2 * mu * lineLen);
       let x = p.ball.x, z = p.ball.z;
       let vx = Math.sin(SHOT.aimAng) * v0, vz = Math.cos(SHOT.aimAng) * v0;
-      const dt = 1 / 30;
+      const dt = DT;              // FC-7: same step as the live putt roll
       const samples = [];
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < 700; i++) {
         ballGrad(x, z, _gr);
-        vx -= _gr[0] * 10.5 * dt; vz -= _gr[1] * 10.5 * dt;
+        vx -= _gr[0] * slopeK(2) * dt; vz -= _gr[1] * slopeK(2) * dt;
         const sp = Math.hypot(vx, vz);
         if (sp < 0.3) break;
         const dec = Math.min(sp, surfMu(surfAt(x, z)) * dt * (1 + sp * 0.06));

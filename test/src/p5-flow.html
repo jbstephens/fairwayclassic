@@ -96,11 +96,23 @@ function refreshHoleInfo() {
   if (!CUR) return;
   holeInfoEl.innerHTML = `<b>HOLE ${CUR.n}</b> · <span class="hn">${CUR.name}</span> · PAR ${CUR.par} · ${CUR.yds} YDS`;
 }
+/* FC-7: the shot line carries the two facts the terrain just made
+   load-bearing — the ELEVATION delta to the pin ("153 YDS ▼18", shown once
+   it is worth a club) and the instructive SIDEHILL read.  Cached: the DOM
+   is only rewritten when the text actually changes (aiming re-reads the
+   lie every frame it moves). */
+let _shotHtml = '';
 function refreshShotInfo() {
   const p = activeP();
   const d = Math.round(distToPin(p.ball.x, p.ball.z));
-  shotInfoEl.innerHTML = `<span class="ptag ${p.colorCls}">${p.name}</span> · STROKE ${p.strokes + 1}` +
-    ` · <span class="dist">${d} YDS</span> TO PIN · ${SURF_NAMES[p.lie]}`;
+  const dy = PIN.y - p.ball.y;
+  const elv = Math.abs(dy) >= 5
+    ? ` <span class="elv">${dy > 0 ? '▲' : '▼'}${Math.round(Math.abs(dy))}</span>` : '';
+  const lie = lieText(p);
+  const html = `<span class="ptag ${p.colorCls}">${p.name}</span> · STROKE ${p.strokes + 1}` +
+    ` · <span class="dist">${d} YDS</span>${elv} TO PIN · ${SURF_NAMES[p.lie]}` +
+    (lie ? `<div class="lieline">${lie}</div>` : '');
+  if (html !== _shotHtml) { _shotHtml = html; shotInfoEl.innerHTML = html; }
 }
 function refreshClub() {
   const p = activeP();
@@ -225,7 +237,7 @@ function startHole() {
     FLY.dStart = CUR.len + 34;
     FLY.dEnd = 12;
     flyT = 0;
-    flyRec = { minPitch: 90, lastD: 1e9, mono: true, endPos: null, n: 0 };
+    flyRec = { minPitch: 90, lastD: 1e9, mono: true, endPos: null, n: 0, minClear: 1e9 };
     state = 'flyover';
     camSnap();
     hudVisible(true);
@@ -233,13 +245,38 @@ function startHole() {
     fadeBlackEl.style.opacity = 0;
   });
 }
+/* ═══ FC-7: the address camera READS THE LAND ═══
+   A 30-yard fall is invisible from a camera that stares at the horizon —
+   the ground simply slides out of frame.  So the eye rises over a drop and
+   tilts down the hill (the fairway falling away fills the shot), and looks
+   UP the slope on a climb.  The tilt is taken from the ground at the far
+   end of the shot, not at the ball, because that is where the drama is.
+   Clamped both ways: the ball never leaves the lower half of the frame,
+   and the pitch never exceeds the flyover's -65 deg comfort law. */
 function addressCamPos(p) {
   const putter = p.lie === 2;
-  const back = putter ? 5.2 : 8.0, up = putter ? 2.1 : 3.0;
+  const back = putter ? 5.4 : 8.0;
+  const look = putter ? 9 : 26;
+  const lx = p.ball.x + aimDirX() * look, lz = p.ball.z + aimDirZ() * look;
+  const dPin = distToPin(p.ball.x, p.ball.z);
+  const far = putter ? clamp(dPin, 3, 24) : clamp(dPin * 0.75, 24, 220);
+  const gFar = groundH(p.ball.x + aimDirX() * far, p.ball.z + aimDirZ() * far);
+  const drop = p.ball.y - gFar;                       // + = the land falls away
+  // over a drop the eye rises to see past the near ground; into a climb it
+  // drops a touch, the way a player standing under the hill actually sees it
+  const up = (putter ? 2.3 : 3.0) + clamp(drop * (putter ? 0.3 : 0.22), 0, putter ? 0.8 : 4)
+    - clamp(-drop * (putter ? 0.02 : 0.06), 0, putter ? 0.3 : 1.0);
   const ex = p.ball.x - aimDirX() * back, ez = p.ball.z - aimDirZ() * back;
   const ey = Math.max(p.ball.y + up, groundH(ex, ez) + 1.6);
-  const look = putter ? 9 : 26;
-  return [ex, ey, ez, p.ball.x + aimDirX() * look, p.ball.y + (putter ? 0.3 : 2.2), p.ball.z + aimDirZ() * look];
+  let ly = lerp(p.ball.y + (putter ? 0.3 : 2.2), gFar + (putter ? 0.45 : 2.2), putter ? 0.6 : 0.5);
+  /* THE BALL NEVER LEAVES THE FRAME: cap the upward tilt against the angle
+     from the eye down to the ball itself, keeping 5 deg inside the 25-deg
+     half-FOV.  (An uphill hole reads from the ground filling the shot; it
+     does not need the camera to point at the sky.) */
+  const ballAng = Math.atan2(p.ball.y - ey, back);
+  ly = Math.min(ly, ey + Math.tan(ballAng + 20 * Math.PI / 180) * look);
+  ly = Math.max(ly, ey - look * 0.52);
+  return [ex, ey, ez, lx, ly, lz];
 }
 /* whose turn: players still to tee off go first (honors order), then farthest */
 function nextTurn() {
@@ -497,7 +534,10 @@ function tickSim() {
       let rot = 0;
       if (IN.aim) rot += IN.aim * 0.65 * DT;
       if (dragAimAcc) { rot += dragAimAcc * 0.0032; dragAimAcc = 0; }
-      if (rot) { SHOT.aimAng -= rot; SHOT.arcDirty = true; refreshWind(); }   // minus: camera looks down +aim dir, so screen-right = decreasing aimAng
+      // minus: camera looks down +aim dir, so screen-right = decreasing aimAng
+      // FC-7: the sidehill read is relative to the AIM line — it re-reads as
+      // the player turns (the HUD write is cached, so this is free at rest)
+      if (rot) { SHOT.aimAng -= rot; SHOT.arcDirty = true; refreshWind(); refreshShotInfo(); }
       /* FC-5 putter-anywhere: the cycle continues past SW into the putter
          from any turf lie (fairway/fringe/rough/tee) — no more overshooting
          from the fringe.  Bunkers keep the loft-out restriction (9i+, never
@@ -883,6 +923,10 @@ function updateCamera(dt) {
         if (d > flyRec.lastD + 0.01) flyRec.mono = false;
         flyRec.lastD = d;
         flyRec.endPos = [px, py, pz];
+        // FC-7 camera-comfort witness: with real relief under the path the
+        // flyover must still never graze the ground it is showing off
+        const clr = py - groundH(px, pz);
+        if (clr < flyRec.minClear) flyRec.minClear = clr;
         flyRec.n++;
       }
       break;
@@ -980,6 +1024,25 @@ function frame(now) {
   if (fpsAcc > 0.5) { TL.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
 }
 
+/* FC-7: release a ball on the ground and run the REAL roll model to rest.
+   The live FLIGHT record is saved and restored, so this is a pure query —
+   the funnel, false-front and termination witnesses all go through it. */
+function rollToRest(x, z, vx, vz) {
+  const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+    vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+    pathN: FLIGHT.pathN, touches: FLIGHT.touches };
+  FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0; FLIGHT.rollT = 0;
+  FLIGHT.x = x; FLIGHT.z = z; FLIGHT.y = groundH(x, z);
+  FLIGHT.vx = vx || 0; FLIGHT.vy = 0; FLIGHT.vz = vz || 0;
+  let n = 0, ev = null;
+  while (FLIGHT.on && n++ < 2400) { const r = tickBall(); if (r) { ev = r.ev; break; } }
+  const out = { x: +FLIGHT.x.toFixed(2), z: +FLIGHT.z.toFixed(2), y: +FLIGHT.y.toFixed(2),
+    t: +(n / 60).toFixed(2), surf: surfAt(FLIGHT.x, FLIGHT.z), ev,
+    moved: +Math.hypot(FLIGHT.x - x, FLIGHT.z - z).toFixed(2) };
+  for (const k in sv) FLIGHT[k] = sv[k];
+  return out;
+}
+
 /* ── debug / harness hooks (sim-tick truth, never rAF counts) ── */
 window.__fc = {
   build: BUILD_TAG,
@@ -1029,7 +1092,8 @@ window.__fc = {
   },
   // ── FC-LOOK-1 hooks ──
   flyDur: FLY_DUR,
-  flyRec: () => (flyRec ? { minPitch: flyRec.minPitch, mono: flyRec.mono, endPos: flyRec.endPos, n: flyRec.n } : null),
+  flyRec: () => (flyRec ? { minPitch: flyRec.minPitch, mono: flyRec.mono, endPos: flyRec.endPos,
+    n: flyRec.n, minClear: flyRec.minClear } : null),
   camPos: () => [camera.position.x, camera.position.y, camera.position.z],
   mapDraws: () => MAPS.draws,
   mapMarker: () => MAPS.marker.slice(),
@@ -1040,6 +1104,132 @@ window.__fc = {
   pose: () => { const g = GOLFERS[turn]; return (g && g.userData.mode) || ''; },
   cin: () => (state === 'birdiecin' ? +cinT.toFixed(2) : -1),
   birdVisible: () => BIRD.visible,
+  /* ══════════════ FC-7 hooks — the terrain-drama witnesses ══════════════ */
+  // camera comfort: how far the live camera floats above the ground it flies
+  camClear: () => camera.position.y - groundH(camera.position.x, camera.position.z),
+  // the sidehill-lie read the HUD is showing, and the bias the arc carries
+  lieInfo: () => {
+    const p = activeP();
+    return { cross: +lieCross(p).toFixed(4), bias: +lieBias(p).toFixed(4),
+      text: lieText(p), rise: +pinRise(p).toFixed(2) };
+  },
+  shotText: () => shotInfoEl.textContent,
+  // per-hole elevation record, straight from the data (no build required)
+  elevTable: () => HOLES.map(H => {
+    let mn = 1e9, mx = -1e9;
+    for (let i = 0; i <= 200; i++) {
+      const e = elevAt(H, H.len * i / 200);
+      if (e < mn) mn = e; if (e > mx) mx = e;
+    }
+    return { hole: H.n, name: H.name, par: H.par, yds: H.yds,
+      tee: +elevAt(H, 0).toFixed(1), green: +elevAt(H, H.len).toFixed(1),
+      lo: +mn.toFixed(1), hi: +mx.toFixed(1),
+      drop: +(elevAt(H, 0) - elevAt(H, H.len)).toFixed(1),
+      relief: +(mx - mn).toFixed(1),
+      cant: H.cant ? +Math.max.apply(null, H.cant.map(c => Math.abs(c[1]))).toFixed(3) : 0,
+      crown: H.crown || 0 };
+  }),
+  // the live, BUILT elevation of the hole on screen (groundH — the authority)
+  elev: () => {
+    if (!CUR) return null;
+    const t = clWorld(CUR, 4, 0);
+    return { hole: CUR.n, teeY: +groundH(t[0], t[1]).toFixed(2), pinY: +PIN.y.toFixed(2),
+      greenH: +GREEN.h.toFixed(2), drop: +(groundH(t[0], t[1]) - PIN.y).toFixed(2) };
+  },
+  // world -> (d along the centerline, off lateral; + = right of play)
+  doff: (x, z) => { const r = clDoff(CUR, x, z); return [r[0], r[1]]; },
+  holeLen: () => (CUR ? CUR.len : 0),
+  cantAt: d => cantAt(CUR, d),
+  fwAt: d => fwAt(CUR, d),
+  elevAt: d => elevAt(CUR, d),
+  // green-local <-> world, so tests can speak the green's own language
+  greenWorld: (lat, along) => [GREEN.x + GREEN.tz * lat + GREEN.tx * along,
+                               GREEN.z - GREEN.tx * lat + GREEN.tz * along],
+  greenLoc: (x, z) => {
+    const dx = x - GREEN.x, dz = z - GREEN.z;
+    return [dx * GREEN.tz - dz * GREEN.tx, dx * GREEN.tx + dz * GREEN.tz];
+  },
+  rollFrom: (x, z, vx, vz) => rollToRest(x, z, vx, vz),
+  /* ONE-GROUND-AUTHORITY audit: walk the RENDERED terrain mesh and compare
+     every sampled vertex against what the physics query returns there.  If
+     these two ever diverge the whole game lies to the player. */
+  groundAudit: (n) => {
+    const m = HOLE_OBJS.find(o => o.isMesh && o.material === MAT_TERRAIN);
+    if (!m) return { worst: -1, n: 0 };
+    const pos = m.geometry.attributes.position.array;
+    const count = (pos.length / 3) | 0;
+    const step = Math.max(1, Math.floor(count / (n || 400)));
+    let worst = 0, at = null, k = 0;
+    for (let i = 0; i < count; i += step) {
+      const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+      const d = Math.abs(groundH(x, z) - y);
+      if (d > worst) { worst = d; at = [+x.toFixed(2), +z.toFixed(2), +y.toFixed(3)]; }
+      k++;
+    }
+    return { worst: +worst.toFixed(5), n: k, at, verts: count };
+  },
+  /* THE TERMINATION LAW SWEEP: build all 18, release balls across the
+     fairway cants and the green complexes, report the worst time to rest
+     (and how many needed the 11 s hard floor — must be zero). */
+  rollSweep: () => {
+    const out = [];
+    const cur = ROUND.holes.length ? ROUND.holes[ROUND.idx] : 11;
+    for (let i = 0; i < 18; i++) {
+      buildHole(i);
+      const H = HOLES[i];
+      let worst = 0, where = '', capped = 0;
+      const test = (x, z, vx, vz, tag) => {
+        const r = rollToRest(x, z, vx, vz);
+        if (r.t > worst) { worst = r.t; where = tag + ' -> ' + r.surf + '/' + r.ev; }
+        if (r.t >= 11) capped++;
+      };
+      for (const f of [0.2, 0.35, 0.5, 0.65, 0.8, 0.92]) {
+        for (const off of [-12, -6, 0, 6, 12]) {
+          const w = clWorld(H, f * H.len, off);
+          test(w[0], w[1], 10, 0, 'fw ' + f + '/' + off);
+          test(w[0], w[1], 0, 10, 'fw ' + f + '/' + off + ' z');
+        }
+      }
+      for (const la of [[0, 0], [0.6, 0], [-0.6, 0], [0, 0.6], [0, -0.6], [0.5, 0.5], [-0.5, -0.5]]) {
+        const lat = la[0] * GREEN.grx, al = la[1] * GREEN.grz;
+        const x = GREEN.x + GREEN.tz * lat + GREEN.tx * al;
+        const z = GREEN.z - GREEN.tx * lat + GREEN.tz * al;
+        test(x, z, 5, 0, 'green ' + la);
+        test(x, z, 0, 5, 'green ' + la + ' z');
+      }
+      out.push({ hole: i + 1, worst: +worst.toFixed(2), where, capped });
+    }
+    buildHole(cur);
+    return out;
+  },
+  /* ARC = TRUTH on sloped ground: run the shared preview, then the REAL
+     launchShot + tickBall from the same lie/aim, and report both landings. */
+  previewVsFlight: (power) => {
+    const p = activeP();
+    const pw = power === undefined ? 1 : power;
+    const savedDiff = DIFF; DIFF = 'amateur';        // no pro spread in the witness
+    simulateArc(p);
+    const prev = [SHOT.landX, SHOT.landZ];
+    const bias = SHOT.bias, cross = SHOT.cross;
+    const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+      vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+      pathN: FLIGHT.pathN, touches: FLIGHT.touches };
+    launchShot(p, pw);
+    let land = null, n = 0;
+    while (FLIGHT.on && n++ < 3600) {
+      const r = tickBall();
+      if (r) { land = [FLIGHT.x, FLIGHT.z]; break; }
+    }
+    FLIGHT.on = false;
+    for (const k in sv) FLIGHT[k] = sv[k];
+    DIFF = savedDiff;
+    SHOT.arcDirty = true; MAPS.dirty = true;
+    return { prev: [+prev[0].toFixed(2), +prev[1].toFixed(2)],
+      land: land ? [+land[0].toFixed(2), +land[1].toFixed(2)] : null,
+      dev: land ? +Math.hypot(land[0] - prev[0], land[1] - prev[1]).toFixed(2) : -1,
+      bias: +bias.toFixed(4), cross: +cross.toFixed(4) };
+  },
+
   /* club range sweep — THE carry-table integrity witness.  Drives the REAL
      launchShot + tickBall pipeline for every club at 100% power on flat
      ground with no wind (the environment is controlled; the mechanic — the

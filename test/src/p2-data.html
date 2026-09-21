@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-6-BIRDSEED';
+const BUILD_TAG = 'FC-7-SAUCE';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -161,94 +161,213 @@ function clubV(c, carry) {
    the centerline, off lateral (+ = right of play).  elv: [[frac, yds]].
    green: { r (radius yds), sx, sz (slope, local lateral/along, yd per yd) }.
    bunkers: [d, off, rx, rz].  water: {t:'pond'|'creek', ...}.
-   fw: fairway halfwidth.  tclump: extra tree clumps [d, off, r, n].       */
+   fw: fairway halfwidth.  tclump: extra tree clumps [d, off, r, n].
+
+   ═══ FC-7 — the Augusta sauce (terrain drama) ═══
+   The OVERHEAD ROUTING IS FROZEN (centerline + bend untouched): Augusta in
+   plan is long corridors with modest bends — the personality is in 3D.  The
+   new per-hole terrain fields, all read by the ONE analytic ground field
+   (makeHoleField) that both the mesh builder and groundH sample:
+
+     elv    [[frac, yds]]  elevation profile, now EXAGGERATED for feel:
+                           10 = the big downhill (~31 yd drop), 9/18 uphill
+                           to elevated greens, 6 = high tee over a valley,
+                           2 long downhill, 8 the climb, 1 crest-then-down,
+                           11/12/13 (Amen Corner) sit low by the creek.
+     cant   [[frac, s]]    LATERAL tilt, yd of rise per yd to the RIGHT of
+                           play — positive cants the fairway toward the
+                           player's LEFT (10 left, 13 hard left to the
+                           creek, 11 toward the pond).
+     crown  yds            fairway crowned: the centerline rides high and
+                           both shoulders fall away (17 = the ridge).
+     funnel yds            rough shoulders that tip BACK toward the short
+                           grass — real funneling, not decoration.
+     fwv    [[frac, hw]]   landing-area width profile (tight where the
+                           reward is, generous bailouts); falls back to fw.
+     green.ang  deg        green turned off the approach line (+ = its long
+                           axis aims right) — 12 is shallow + diagonal.
+     green.lobes [[lat, along, r, amp]]   multi-lobe contour field, green
+                           local yards; the putt sim, the green-read arrows
+                           and the zoomed minimap all read the same field.
+     green.tiers [[dLat, dAlong, at, rise, w]]  terraces (14).
+     green.ffront {at, w, drop, ext}      a false front that SHEDS short
+                           balls back down the hill (9).
+     green.pin  [lat, along]              a hand-set hole location where the
+                           complex is the point (9 back shelf, 16 Sunday).
+     green.mound yds       mounding ringing the green complex.            */
 const HOLES = [
   /* FC-5: club: [d, off] plants THE clubhouse (cupola + veranda + live oak)
      on the holes that see it (1 tee, 9 green, 18 approach); cabins: true
      plants the two white cabins by the 10th tee; creeks get stone bridges
      automatically (12/13 — the Hogan/Nelson homage). */
+  /* 1 — up over a crest, then down to a green benched into the far side */
   { n: 1, name: 'Tea Olive', par: 4, yds: 445, bend: [[0.56, 24]], fw: 15,
-    elv: [[0, 0], [0.5, 1.5], [1, 4.5]],
-    bunkers: [[295, 22, 13, 9]], water: [], club: [64, -40],
-    green: { r: 12, sx: -0.018, sz: -0.014 },
+    elv: [[0, 0], [0.55, 8.5], [0.8, 7], [1, 5]],
+    cant: [[0, -0.02], [0.55, 0.04], [1, 0.025]], crown: 0.8, funnel: 1.0,
+    fwv: [[0, 16], [0.58, 11.5], [0.75, 15], [1, 15]],
+    bunkers: [[292, 21, 13, 9], [330, 19, 10, 7]], water: [], club: [64, -40],
+    green: { r: 12, sx: -0.022, sz: -0.016, ang: -12, mound: 1.3,
+      lobes: [[3.6, 2.6, 7, 0.5], [-4.2, -3, 6, -0.38]] },
     tclump: [[250, 40, 26, 16], [355, -34, 24, 12]] },
+  /* 2 — the long plunge: 20 yds of downhill, fairway tipping right-to-left */
   { n: 2, name: 'Pink Dogwood', par: 5, yds: 575, bend: [[0.52, -20]], fw: 17,
-    elv: [[0, 0], [0.35, -2], [1, -9]],
-    bunkers: [[548, -13, 9, 7], [552, 14, 9, 7]], water: [],
-    green: { r: 13, sx: 0.016, sz: -0.012 }, dogwood: true,
+    elv: [[0, 0], [0.12, -3], [0.35, -8], [0.7, -15], [1, -20]],
+    cant: [[0, 0.015], [0.5, 0.055], [1, 0.03]], crown: 0.7, funnel: 1.1,
+    fwv: [[0, 18], [0.5, 13], [0.72, 18], [1, 16]],
+    bunkers: [[548, -13, 9, 7], [552, 14, 9, 7], [330, -19, 12, 9]], water: [],
+    green: { r: 13, sx: 0.02, sz: -0.014, ang: 10, mound: 1.4,
+      lobes: [[-4, 3, 7, 0.55], [4.5, -3.5, 6.5, -0.4]] }, dogwood: true,
     tclump: [[290, -38, 28, 16]] },
+  /* 3 — short, sharply uphill to a tiny crowned green */
   { n: 3, name: 'Flowering Peach', par: 4, yds: 350, bend: [], fw: 14,
-    elv: [[0, 0], [0.6, 0.8], [1, 2.5]],
+    elv: [[0, 0], [0.55, 2.5], [1, 7]],
+    cant: [[0, 0.02], [1, 0.03]], crown: 1.0, funnel: 1.1,
+    fwv: [[0, 15], [0.62, 10], [1, 13]],
     bunkers: [[238, -20, 10, 8], [252, -24, 9, 7], [266, -19, 9, 7], [280, -24, 8, 6]],
-    water: [], green: { r: 9, sx: 0.014, sz: 0.02 }, peach: true, tclump: [] },
+    water: [], green: { r: 9, sx: 0.018, sz: 0.024, ang: -8, mound: 1.25,
+      lobes: [[0, 2.5, 5.5, 0.42], [-2.5, -2.5, 5, -0.3]] }, peach: true, tclump: [] },
+  /* 4 — long one-shotter falling gently away over a shelf */
   { n: 4, name: 'Flowering Crab', par: 3, yds: 240, bend: [], fw: 9,
-    elv: [[0, 0], [1, -1.5]],
+    elv: [[0, 0], [0.55, -3], [1, -5.5]],
+    cant: [[0, 0], [1, -0.03]], crown: 0.5, funnel: 0.9,
     bunkers: [[218, 13, 10, 8], [226, -15, 9, 8]], water: [],
-    green: { r: 12, sx: -0.015, sz: 0.016 }, tclump: [[120, 32, 22, 10]] },
+    green: { r: 12, sx: -0.02, sz: 0.018, ang: 14, mound: 1.3,
+      lobes: [[-3.5, 3, 6.5, 0.45], [3.5, -3, 6, -0.35]] }, tclump: [[120, 32, 22, 10]] },
+  /* 5 — the climb: 13 yds up, green perched above two deep bunkers */
   { n: 5, name: 'Magnolia', par: 4, yds: 495, bend: [[0.5, -18]], fw: 15,
-    elv: [[0, 0], [0.5, 2], [1, 6]],
+    elv: [[0, 0], [0.45, 4], [1, 13]],
+    cant: [[0, 0.03], [0.55, 0.05], [1, 0.035]], crown: 0.8, funnel: 1.0,
+    fwv: [[0, 16], [0.55, 11], [0.78, 15], [1, 14]],
     bunkers: [[300, -20, 14, 9], [318, -22, 12, 8]], water: [],
-    green: { r: 12, sx: 0.012, sz: -0.02 }, magnolia: true, tclump: [[265, -36, 26, 14]] },
+    green: { r: 12, sx: 0.016, sz: -0.024, ang: -10, mound: 1.25,
+      lobes: [[-3.8, -2.5, 6.5, 0.48], [3.5, 3, 6, -0.34]] }, magnolia: true,
+    tclump: [[265, -36, 26, 14]] },
+  /* 6 — the high tee: the land drops 15 yds into a valley, green on the far shelf */
   { n: 6, name: 'Juniper', par: 3, yds: 180, bend: [], fw: 8,
-    elv: [[0, 0], [0.2, -1], [1, -8]],
+    elv: [[0, 0], [0.11, -4], [0.45, -15], [0.8, -18], [1, -12]],
+    cant: [[0, 0], [1, -0.035]], crown: 0.4, funnel: 1.2,
     bunkers: [[164, 14, 11, 8]], water: [],
-    green: { r: 13, sx: -0.02, sz: 0.012 }, tclump: [[90, -26, 20, 10]] },
+    green: { r: 13, sx: -0.024, sz: 0.016, ang: 16, mound: 1.3,
+      lobes: [[-4, 3.5, 7, 0.55], [4, -3, 6.5, -0.42]] }, tclump: [[90, -26, 20, 10]] },
+  /* 7 — the tight chute, crowned all the way, climbing to a tiny green */
   { n: 7, name: 'Pampas', par: 4, yds: 450, bend: [], fw: 11,
-    elv: [[0, 0], [1, 1.5]],
+    elv: [[0, 0], [0.5, 1.5], [1, 6]],
+    cant: [[0, 0.02], [1, 0.025]], crown: 1.3, funnel: 1.3,
+    fwv: [[0, 12], [0.6, 9], [1, 11]],
     bunkers: [[418, -10, 9, 7], [424, 0, 9, 7], [418, 10, 9, 7]], water: [],
-    green: { r: 10, sx: 0.01, sz: 0.022 }, chute: true, pampas: true, tclump: [] },
+    green: { r: 10, sx: 0.014, sz: 0.026, ang: 0, mound: 1.3,
+      lobes: [[0, 2.5, 5.5, 0.45], [-3, -2, 5, -0.3]] }, chute: true, pampas: true, tclump: [] },
+  /* 8 — the long uphill grind: 21 yds of climb, fairway falling to the right */
   { n: 8, name: 'Yellow Jasmine', par: 5, yds: 570, bend: [[0.6, 10]], fw: 16,
-    elv: [[0, 0], [0.4, 3], [1, 10]],
-    bunkers: [[275, 20, 14, 10]], water: [],
-    green: { r: 12, sx: -0.012, sz: -0.016 }, tclump: [[430, -30, 24, 12]] },
+    elv: [[0, 0], [0.35, 5], [0.7, 13], [1, 21]],
+    cant: [[0, -0.03], [0.5, -0.055], [1, -0.03]], crown: 0.8, funnel: 1.0,
+    fwv: [[0, 17], [0.48, 12], [0.7, 17], [1, 15]],
+    bunkers: [[275, 20, 14, 10], [452, -18, 12, 8]], water: [],
+    green: { r: 12, sx: -0.016, sz: -0.02, ang: 8, mound: 1.3,
+      lobes: [[3.5, -2.5, 6.5, 0.5], [-3.5, 3, 6, -0.36]] }, tclump: [[430, -30, 24, 12]] },
+  /* 9 — the drive plunges, the approach climbs back to an elevated green
+         with a FALSE FRONT that sheds anything short back down the hill */
   { n: 9, name: 'Carolina Cherry', par: 4, yds: 460, bend: [[0.45, -14]], fw: 15,
-    elv: [[0, 0], [0.45, -5], [1, 2]],
+    elv: [[0, 0], [0.45, -13], [0.78, -7], [1, 9]],
+    cant: [[0, -0.02], [0.5, 0.045], [1, 0.02]], crown: 0.8, funnel: 1.0,
+    fwv: [[0, 16], [0.55, 12], [0.8, 16], [1, 14]],
     bunkers: [[420, -16, 11, 8], [438, -18, 10, 7]], water: [], club: [490, 12],
-    green: { r: 11, sx: 0.014, sz: 0.03 }, tclump: [[240, -34, 22, 12]] },
+    green: { r: 11, sx: 0.016, sz: 0.028, ang: -6, mound: 0.8,
+      ffront: { at: -3.0, w: 7.0, drop: 2.9, ext: 1.45 },
+      pin: [1.6, 4.2],
+      lobes: [[-3, 3.5, 6, 0.4]] },
+    tclump: [[240, -34, 22, 12]] },
+  /* 10 — CAMELLIA: the big sweeping downhill, ~31 yds of drop, and a fairway
+          canted hard toward the player's LEFT — the right half FEEDS LEFT */
   { n: 10, name: 'Camellia', par: 4, yds: 495, bend: [[0.4, -22]], fw: 16,
-    elv: [[0, 0], [0.5, -9], [1, -16]],
+    elv: [[0, 0], [0.09, -5], [0.32, -15], [0.62, -24], [1, -31]],
+    cant: [[0, 0.035], [0.35, 0.095], [0.8, 0.085], [1, 0.055]], crown: 0.5, funnel: 1.3,
+    fwv: [[0, 17], [0.45, 14], [0.75, 19], [1, 16]],
     bunkers: [[330, 18, 13, 9]], water: [], cabins: true,
-    green: { r: 13, sx: -0.016, sz: 0.014 }, camellia: true, tclump: [[230, -38, 28, 16]] },
+    green: { r: 13, sx: -0.02, sz: 0.018, ang: 12, mound: 1.3,
+      lobes: [[-4, 3, 7, 0.5], [4, -3.5, 6.5, -0.42]] }, camellia: true,
+    tclump: [[230, -38, 28, 16]] },
+  /* 11 — the long fall into Amen Corner; the whole hole leans at the pond */
   { n: 11, name: 'White Dogwood', par: 4, yds: 520, bend: [[0.5, -8]], fw: 16,
-    elv: [[0, 0], [0.4, -4], [1, -10]],
-    bunkers: [],
+    elv: [[0, 0], [0.14, -3], [0.4, -9], [0.75, -15], [1, -19]],
+    cant: [[0, 0.02], [0.5, 0.06], [1, 0.055]], crown: 0.6, funnel: 1.0,
+    fwv: [[0, 17], [0.5, 13], [0.78, 17], [1, 15]],
+    bunkers: [[510, 17, 10, 7]],
     water: [{ t: 'pond', d: 505, off: -24, rx: 20, rz: 15 }],
-    green: { r: 12, sx: 0.014, sz: -0.012 }, dogwood: true, tclump: [[300, 36, 26, 14]] },
+    green: { r: 12, sx: 0.022, sz: -0.014, ang: -14, mound: 1.4,
+      lobes: [[-4, 2.5, 6.5, -0.45], [3.5, -3, 6, 0.38]] }, dogwood: true,
+    tclump: [[300, 36, 26, 14]] },
+  /* 12 — GOLDEN BELL: low by Rae's Creek, the green shallow AND diagonal */
   { n: 12, name: 'Golden Bell', par: 3, yds: 155, bend: [], fw: 8,
-    elv: [[0, 0], [0.75, -3], [1, -2.2]],
+    elv: [[0, 0], [0.55, -6], [0.8, -7], [1, -5]],
+    cant: [[0, 0], [1, 0.03]], crown: 0.3, funnel: 0.8,
     bunkers: [[139, 2, 10, 5], [168, -8, 8, 5], [172, 9, 8, 5]],
     water: [{ t: 'creek', d: 126, w: 12 }],
-    green: { r: 13, gex: 1.7, sx: -0.012, sz: 0.014 }, swirl: true, azalea: true,
+    green: { r: 13, gex: 1.7, sx: -0.016, sz: 0.02, ang: 34, mound: 1.25,
+      pin: [6.5, 1.2],
+      lobes: [[-7, 1.5, 8, 0.5], [7, -1.5, 7, -0.4]] }, swirl: true, azalea: true,
     tclump: [[176, -30, 20, 10], [180, 28, 20, 10]] },
+  /* 13 — AZALEA: the whole fairway tips hard right-to-left, INTO the creek */
   { n: 13, name: 'Azalea', par: 5, yds: 545, bend: [[0.45, -26]], fw: 16,
-    elv: [[0, 0], [0.5, -3], [1, -6]],
+    elv: [[0, 0], [0.45, -4], [0.8, -7], [1, -8]],
+    cant: [[0, 0.035], [0.45, 0.095], [0.85, 0.085], [1, 0.05]], crown: 0.4, funnel: 1.2,
+    fwv: [[0, 18], [0.5, 15], [0.8, 20], [1, 16]],
     bunkers: [[556, -10, 9, 6], [558, 2, 9, 6], [556, 13, 8, 6], [563, -3, 8, 5]],
     water: [{ t: 'creek', d: 520, w: 10 }],
-    green: { r: 13, sx: 0.016, sz: -0.014 }, azalea: true,
+    green: { r: 13, sx: 0.02, sz: -0.016, ang: 12, mound: 1.4,
+      lobes: [[-4, 3, 7, 0.5], [4, -3, 6.5, -0.4]] }, azalea: true,
     tclump: [[250, -40, 30, 18]] },
+  /* 14 — no sand anywhere; the defence is a wildly TERRACED green */
   { n: 14, name: 'Chinese Fir', par: 4, yds: 440, bend: [[0.5, -10]], fw: 15,
-    elv: [[0, 0], [0.5, 2], [1, 5]],
+    elv: [[0, 0], [0.5, 4], [1, 10]],
+    cant: [[0, -0.025], [0.55, -0.05], [1, -0.03]], crown: 0.9, funnel: 1.2,
+    fwv: [[0, 17], [0.55, 12], [1, 15]],
     bunkers: [], water: [],
-    green: { r: 13, sx: -0.026, sz: 0.026 }, tclump: [[240, 34, 22, 12]] },
+    green: { r: 13, sx: -0.028, sz: 0.012, ang: -8, mound: 1.35,
+      tiers: [[0, 1, 2.2, 0.95, 3.4], [0, 1, -4.6, 0.8, 3.2]],
+      pin: [-2.0, 5.5],
+      lobes: [[4.5, -1.5, 6, -0.35]] }, tclump: [[240, 34, 22, 12]] },
+  /* 15 — reachable in two, falling away to a green perched over the pond */
   { n: 15, name: 'Firethorn', par: 5, yds: 550, bend: [], fw: 17,
-    elv: [[0, 0], [0.5, -2], [1, -5]],
-    bunkers: [[540, 22, 10, 8]],
+    elv: [[0, 0], [0.45, -5], [0.85, -11], [1, -9]],
+    cant: [[0, -0.02], [0.5, -0.045], [1, -0.03]], crown: 0.7, funnel: 1.0,
+    fwv: [[0, 18], [0.5, 14], [0.8, 19], [1, 16]],
+    bunkers: [[540, 22, 10, 8], [352, -20, 12, 9]],
     water: [{ t: 'pond', d: 516, off: -2, rx: 26, rz: 12 }],
-    green: { r: 12, sx: 0.012, sz: -0.018 }, tclump: [[300, -36, 24, 12]] },
+    green: { r: 12, sx: 0.016, sz: -0.022, ang: 8, mound: 1.25,
+      lobes: [[-3.5, -3, 6.5, 0.45], [3.5, 3, 6, -0.35]] }, tclump: [[300, -36, 24, 12]] },
+  /* 16 — REDBUD: all carry, and a green that FEEDS hard right-to-left to
+          the Sunday pin — land it right and it trickles down to the hole */
   { n: 16, name: 'Redbud', par: 3, yds: 170, bend: [], fw: 0,
-    elv: [[0, 0], [1, -2.5]],
+    elv: [[0, 0], [0.5, -4], [1, -6]],
+    cant: [[0, 0], [1, 0.03]], crown: 0.3, funnel: 0.9,
     bunkers: [[152, 16, 10, 7], [172, -16, 9, 7]],
     water: [{ t: 'pond', d: 95, off: -6, rx: 34, rz: 50 }],
-    green: { r: 13, sx: -0.03, sz: 0.008 }, redbud: true, tclump: [[120, 34, 22, 10]] },
+    green: { r: 13, sx: 0.035, sz: 0.01, ang: -10, mound: 1.2,
+      /* the FEEDER: a broad right-to-left ramp steep enough that the turf
+         cannot hold a ball on it — land right and it trickles down to the
+         Sunday pin, which sits on the gentle shelf at the bottom */
+      tiers: [[1, 0, 5.0, 2.3, 14]],
+      pin: [-5.6, 1.4],
+      lobes: [[-5, -1.5, 6.5, -0.28]] }, redbud: true,
+    tclump: [[120, 34, 22, 10]] },
+  /* 17 — NANDINA: a pronounced RIDGE runs the fairway; both sides fall away */
   { n: 17, name: 'Nandina', par: 4, yds: 440, bend: [], fw: 14,
-    elv: [[0, 0], [1, 2.5]],
+    elv: [[0, 0], [0.55, 4], [1, 9]],
+    cant: [[0, 0.01], [1, 0.015]], crown: 2.0, funnel: 1.4,
+    fwv: [[0, 15], [0.6, 11], [1, 14]],
     bunkers: [[412, -14, 10, 8], [416, 14, 10, 8]], water: [],
-    green: { r: 11, sx: 0.012, sz: -0.016 }, tclump: [[220, -32, 22, 12]] },
+    green: { r: 11, sx: 0.016, sz: -0.02, ang: -6, mound: 1.25,
+      lobes: [[-3, 2.5, 6, 0.42], [3, -2.5, 5.5, -0.32]] }, tclump: [[220, -32, 22, 12]] },
+  /* 18 — HOLLY: the climb home — 23 yds uphill into a green in the sky */
   { n: 18, name: 'Holly', par: 4, yds: 465, bend: [[0.55, 26]], fw: 14,
-    elv: [[0, 0], [0.55, 2], [1, 7]],
+    elv: [[0, 0], [0.3, 4], [0.62, 10], [1, 23]],
+    cant: [[0, 0.03], [0.55, 0.05], [1, 0.03]], crown: 0.9, funnel: 1.2,
+    fwv: [[0, 15], [0.55, 10.5], [0.8, 15], [1, 14]],
     bunkers: [[252, 16, 11, 8], [268, 20, 10, 7], [438, -13, 9, 7], [452, 12, 9, 7]],
     water: [], club: [494, -16],
-    green: { r: 12, sx: -0.014, sz: -0.018 }, gallery: true,
+    green: { r: 12, sx: -0.018, sz: -0.022, ang: 10, mound: 1.35,
+      lobes: [[3.5, 3, 6.5, 0.5], [-4, -2.5, 6, -0.4]] }, gallery: true,
     tclump: [[260, 44, 26, 16]] },
 ];
 

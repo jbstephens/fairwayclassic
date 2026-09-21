@@ -47,6 +47,12 @@ html, body {
 #shotInfo .ptag { font-weight: 800; letter-spacing: 1px; }
 #shotInfo .p1c { color: #ff8f7a; } #shotInfo .p2c { color: #7ab8ff; }
 #shotInfo .dist { color: #ffd75e; font-weight: 700; }
+/* FC-7: the elevation delta to the pin, and the instructive sidehill read */
+#shotInfo .elv { color: #9fdcff; font-weight: 800; letter-spacing: 0.5px; }
+#shotInfo .lieline {
+  margin-top: 2px; font-size: 19px; letter-spacing: 1px; color: #ffcf8a;
+  font-family: Georgia, serif; font-style: italic;
+}
 /* FC-LOOK-1: the hole panel — baked minimap + club selector, one flat
    rgba panel (HOUSE LAW: no backdrop-filter), couch-legible at 720p */
 #clubBox { right: 18px; bottom: 16px; font-size: 25px; text-align: center;
@@ -60,6 +66,7 @@ html, body {
    the virtual stick / face buttons (class set on overlay detection) */
 body.tp-on #clubBox { bottom: 158px; }
 body.tp-on #shotInfo { bottom: 158px; }
+body.tp-on #hintLine { bottom: 238px; }
 
 /* power meter — flat zones, chunky, couch-legible */
 #meterWrap {
@@ -95,8 +102,10 @@ body.tp-on #shotInfo { bottom: 158px; }
   margin-top: 8px; font-size: 27px; color: #f2efe2;
   text-shadow: 0 2px 0 rgba(10, 30, 15, 0.85);
 }
+/* FC-7: the shot panel can carry a second (sidehill) line, so the hint
+   sits above the panel's tallest form instead of colliding with it */
 #hintLine {
-  position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);
   font-size: 18px; color: rgba(240, 235, 210, 0.85); letter-spacing: 1px;
   text-shadow: 0 2px 0 rgba(0,0,0,0.5); white-space: nowrap; display: none;
 }

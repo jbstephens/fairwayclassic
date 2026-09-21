@@ -150,14 +150,22 @@ async function partA() {
     await page.pressPad('start'); await sleep(300);
     ok((await page.eval('__fc.state()')) === 'address', 'START resumes');
 
-    // reach the green (debug teleport), putt out both players
-    for (let pi = 0; pi < 2; pi++) {
-      await waitState(page, 'address', 'address for putt-out', 20000);
-      const turn = await page.eval('__fc.turn()');
+    /* reach the green (debug teleport), putt out both players.  FC-7: the
+       greens carry real contour now, so the putt-out drives WHOEVER IS
+       ACTUALLY UP (honors order alternates after every stroke) and sets the
+       ball at tap-in range — the beat under test is holing out and the
+       card, not the break on a 2.4-yd putt (that gets its own section). */
+    let firstOnGreen = true;
+    for (let shot = 0; shot < 16; shot++) {
+      if (await page.eval('__fc.players().every(p=>p.holed)')) break;
+      await waitState(page, ['address', 'card'], 'address for putt-out', 25000);
+      if ((await page.eval('__fc.state()')) === 'card') break;
       const pin = await page.eval('__fc.pin()');
-      await page.eval(`__fc.teleport(${pin.x - 1.8}, ${pin.z - 1.6})`);
+      const sgn = (await page.eval('__fc.turn()')) === 0 ? -1 : 1;
+      await page.eval(`__fc.teleport(${pin.x + sgn * 0.9}, ${pin.z + sgn * 0.8})`);
       await sleep(200);
-      if (pi === 0) {
+      if (firstOnGreen) {
+        firstOnGreen = false;
         ok((await page.eval('__fc.club()')) === 'PT', 'putter auto-selected on the green');
         ok((await page.eval('__fc.lie()')) === 2, 'lie reads GREEN');
         await sleep(300);
@@ -169,15 +177,8 @@ async function partA() {
         await page.pressPad('north'); await sleep(350);
         ok((await page.eval('__fc.state()')) === 'address', 'green-read toggles back');
       }
-      // putt until this player holes (generous cup; a couple tries at most)
-      for (let tries = 0; tries < 6; tries++) {
-        const holed = (await page.eval('__fc.players()'))[turn].holed;
-        if (holed) break;
-        await waitState(page, 'address', 'putt address', 20000);
-        if ((await page.eval('__fc.turn()')) !== turn) break;   // other player interleaved
-        await lockMeterAt(page, 46);
-        await waitShotDone(page);
-      }
+      await lockMeterAt(page, 46);
+      await waitShotDone(page);
     }
     await page.waitFor(`__fc.players().every(p=>p.holed)`, 'both players holed', 60000);
     await waitState(page, 'card', 'scorecard', 15000);
@@ -243,7 +244,7 @@ async function partA() {
       if ((await page.eval('__fc.state()')) === 'card') break;
       await waitState(page, 'address', 'p2 address', 20000);
       const pin = await page.eval('__fc.pin()');
-      await page.eval(`__fc.teleport(${pin.x + 1.7}, ${pin.z + 1.5})`);
+      await page.eval(`__fc.teleport(${pin.x + 0.9}, ${pin.z + 0.8})`);
       await sleep(200);
       await lockMeterAt(page, 46);
       await waitShotDone(page);
@@ -297,12 +298,12 @@ async function partA() {
       let birdiePutt = false;
       if (turn === 0) {
         if ((await page.eval('__fc.players()'))[0].strokes === 1) {
-          await page.eval(`__fc.teleport(${pin.x - 1.9}, ${pin.z - 1.4})`);
+          await page.eval(`__fc.teleport(${pin.x - 0.9}, ${pin.z - 0.7})`);
           await sleep(200);
           birdiePutt = true;
         }
       } else {
-        await page.eval(`__fc.teleport(${pin.x + 1.8}, ${pin.z + 1.3})`);
+        await page.eval(`__fc.teleport(${pin.x + 0.9}, ${pin.z + 0.7})`);
         await sleep(200);
       }
       await lockMeterAt(page, 46);
@@ -533,10 +534,10 @@ async function partE() {
           break;
         }
         const pin = await page.eval('__fc.pin()');
-        await page.eval(`__fc.teleport(${pin.x - 1.6}, ${pin.z - 1.4})`);
+        await page.eval(`__fc.teleport(${pin.x - 0.9}, ${pin.z - 0.8})`);
         await sleep(150);
         await page.pressPad('south'); await sleep(150);          // meter start
-        await page.pressPad('south');                            // lock — any power holes from 2 yds
+        await page.pressPad('south');                            // lock — any power holes from a yard
       }
     }
     await waitState(page, 'roundend', 'round end', 25000);
@@ -705,14 +706,263 @@ async function partG() {
   } finally { await page.close(); }
 }
 
+/* ════════ PART H — FC-7: the Augusta sauce (terrain drama) ════════
+   Elevation per hole, one-ground-authority, the funnel, the false front,
+   the feeder and the terraces, sidehill lies (HUD + arc = truth), the
+   elevation-aware HUD, and the roll TERMINATION LAW across all 18. */
+async function partH() {
+  console.log('\n═══ PART H: FC-7 terrain drama ═══');
+  const page = await openPage(CDP);
+  try {
+    await page.nav(`http://localhost:${HTTP}/`);
+    await page.connectPad(0);
+    await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
+    ok((await page.eval('__fc.build')) === 'FC-7-SAUCE', 'build tag is FC-7-SAUCE');
+    await sleep(400);
+    for (const want of ['diffpick', 'roundpick', 'flyover']) {
+      for (let i = 0; i < 6; i++) {
+        await page.pressPad('south'); await sleep(350);
+        if ((await page.eval('__fc.state()')) === want) break;
+      }
+    }
+    await waitState(page, 'flyover', 'flyover', 15000);
+    await sleep(1300);
+    await page.pressPad('south');
+    await waitState(page, 'address', 'address', 10000);
+    await page.eval('__fc.setWind(0,0)');
+    const goHole = async n => {
+      await page.eval(`__fc.gotoHole(${n})`);
+      await page.waitFor(`__fc.state()==='flyover' && __fc.hole()===${n}`, 'hole ' + n, 20000);
+      await sleep(1200);
+      await page.pressPad('south');
+      await waitState(page, 'address', 'address ' + n, 10000);
+      await page.eval('__fc.setWind(0,0)');
+      await sleep(150);
+    };
+
+    /* ── 1. the per-hole elevation record ── */
+    const ET = await page.eval('JSON.parse(JSON.stringify(__fc.elevTable()))');
+    globalThis.__fc7elev = ET;
+    const EH = n => ET[n - 1];
+    console.log('  per-hole elevation (yds, tee = 0):\n' + ET.map(r =>
+      `    ${String(r.hole).padStart(2)} ${r.name.padEnd(16)} par ${r.par} ${String(r.yds).padStart(3)}y` +
+      `  tee ${String(r.tee).padStart(5)}  green ${String(r.green).padStart(6)}  low ${String(r.lo).padStart(6)}` +
+      `  high ${String(r.hi).padStart(5)}  relief ${String(r.relief).padStart(5)}  cant ${String(r.cant).padStart(5)}  crown ${r.crown}`).join('\n'));
+    ok(EH(10).tee - EH(10).green >= 28,
+      `10 Camellia: the big sweeping downhill drops ${(EH(10).tee - EH(10).green).toFixed(1)} yds (>= 28)`);
+    ok(EH(9).green - EH(9).tee >= 6 && EH(9).lo <= -8,
+      `9: the drive plunges to ${EH(9).lo} then climbs to an elevated green (+${EH(9).green})`);
+    ok(EH(18).green - EH(18).tee >= 18, `18 Holly: uphill finish climbs ${EH(18).green} yds`);
+    ok(EH(6).lo <= Math.min(EH(6).tee, EH(6).green) - 4,
+      `6 Juniper: a real valley (${EH(6).lo}) under the high tee and the green (${EH(6).green})`);
+    ok(EH(2).tee - EH(2).green >= 15, `2: the long downhill (${EH(2).tee - EH(2).green} yds)`);
+    ok(EH(8).green - EH(8).tee >= 18, `8: the uphill climb (+${EH(8).green} yds)`);
+    ok(EH(1).hi >= EH(1).green + 2,
+      `1: rises to a crest (${EH(1).hi}) then falls to the green (${EH(1).green})`);
+    for (const n of [11, 12, 13])
+      ok(EH(n).green <= -3, `${n} (Amen Corner) sits low along the creek (green ${EH(n).green})`);
+    ok(ET.every(r => r.relief >= 5), 'every hole carries >= 5 yds of relief — no flat holes left');
+    ok(EH(10).cant >= 0.08 && EH(13).cant >= 0.08,
+      `10 and 13 carry the big lateral cants (${EH(10).cant} / ${EH(13).cant})`);
+    ok(EH(17).crown >= 1.8, `17 Nandina rides a ridge (crown ${EH(17).crown} yds)`);
+
+    /* ── 2. ONE-GROUND-AUTHORITY + the BUILT elevation matches the record ── */
+    for (const n of [1, 6, 10, 14, 18]) {
+      await goHole(n);
+      const a = await page.eval('JSON.parse(JSON.stringify(__fc.groundAudit(600)))');
+      ok(a.worst < 0.002,
+        `hole ${n}: groundH == the rendered terrain, vertex for vertex (worst ${a.worst} yd over ${a.n}/${a.verts})`);
+      const e = await page.eval('JSON.parse(JSON.stringify(__fc.elev()))');
+      ok(Math.abs(e.drop - (EH(n).tee - EH(n).green)) <= 2.5,
+        `hole ${n}: built tee->pin drop ${e.drop} matches the record ${(EH(n).tee - EH(n).green).toFixed(1)}`);
+    }
+
+    /* ── 3. the FUNNEL: a drive up 10's right half finishes LEFT ── */
+    await goHole(10);
+    const fun = await page.eval(`JSON.parse(JSON.stringify((() => {
+      const out = [];
+      for (const st of [[240, 9], [200, 10], [280, 11]]) {
+        const a = __fc.clWorld(st[0], st[1]), b = __fc.clWorld(st[0] + 20, st[1]);
+        const dx = b[0]-a[0], dz = b[1]-a[1], l = Math.hypot(dx, dz);
+        const r = __fc.rollFrom(a[0], a[1], dx/l*13, dz/l*13);
+        const e = __fc.doff(r.x, r.z);
+        out.push({ from: st, offEnd: +e[1].toFixed(2), run: r.moved, t: r.t, surf: r.surf });
+      }
+      return out;
+    })()))`);
+    console.log('  hole 10 funnel:', JSON.stringify(fun));
+    for (const f of fun)
+      ok(f.offEnd < f.from[1] - 1.0 && f.surf === 1,
+        `10: a drive running up the right half (off +${f.from[1]}) feeds LEFT to off +${f.offEnd} over ${f.run} yds`);
+
+    /* ── 4. the FALSE FRONT on 9: a ball landing short is SHED back ── */
+    await goHole(9);
+    const ff = await page.eval(`JSON.parse(JSON.stringify((() => {
+      const g = __fc.green();
+      const land = __fc.greenWorld(0, -(g.grz + 2));      // 2 yds short of the green
+      const tgt = __fc.greenWorld(0, 0);
+      const dx = tgt[0]-land[0], dz = tgt[1]-land[1], l = Math.hypot(dx, dz);
+      const out = [];
+      for (const sp of [4, 8]) {
+        const r = __fc.rollFrom(land[0], land[1], dx/l*sp, dz/l*sp);
+        out.push({ sp, landAlong: +(-(g.grz + 2)).toFixed(1),
+          restAlong: +__fc.greenLoc(r.x, r.z)[1].toFixed(2), surf: r.surf, t: r.t });
+      }
+      const mid = __fc.greenWorld(0, 2);
+      const rm = __fc.rollFrom(mid[0], mid[1], 0, 0);
+      out.push({ mid: true, restAlong: +__fc.greenLoc(rm.x, rm.z)[1].toFixed(2), surf: rm.surf, t: rm.t });
+      return out;
+    })()))`);
+    console.log('  hole 9 false front:', JSON.stringify(ff));
+    for (const r of ff.filter(x => !x.mid)) {
+      ok(r.restAlong < r.landAlong - 0.5,
+        `9 false front: a ball landing 2 yds short at ${sp2(r)} rolls BACKWARD to ${r.restAlong}`);
+      ok(r.surf !== 2, `9 false front: it is shed off the green (finishes on surface ${r.surf})`);
+    }
+    const midBall = ff.find(x => x.mid);
+    ok(midBall.surf === 2 && midBall.t < 1.5, '9: a ball on the green proper still settles at once');
+
+    /* ── 5. SIDEHILL LIES: the HUD line, and the arc carries the bias ── */
+    const sideCases = [[13, 300, 9], [10, 250, 10], [17, 250, 11]];
+    for (const c of sideCases) {
+      await goHole(c[0]);
+      const r = await page.eval(`JSON.parse(JSON.stringify((() => {
+        __fc.teleport(...__fc.clWorld(${c[1]}, ${c[2]}));
+        const info = __fc.lieInfo();
+        const pv = __fc.previewVsFlight(1);
+        return { lie: __fc.lie(), info, pv, txt: __fc.shotText() };
+      })()))`);
+      console.log(`  hole ${c[0]} lie at (${c[1]},${c[2]}):`, JSON.stringify(r.info), 'dev', r.pv.dev);
+      ok(r.lie === 1, `hole ${c[0]}: the sidehill probe sits on the fairway`);
+      ok(Math.abs(r.info.cross) > 0.03, `hole ${c[0]}: a real cant under the ball (cross ${r.info.cross})`);
+      ok(/BALL (ABOVE|BELOW) FEET/.test(r.txt),
+        `hole ${c[0]}: the HUD says it — "${(r.txt.match(/BALL[^]*?(left|right)/) || [''])[0]}"`);
+      const wantLeft = r.info.cross > 0;
+      ok((wantLeft && r.info.bias < 0) || (!wantLeft && r.info.bias > 0),
+        `hole ${c[0]}: ${wantLeft ? 'above the feet biases LEFT' : 'below the feet biases RIGHT'} (${r.info.bias} rad)`);
+      ok(Math.abs(r.info.bias) <= 0.08, `hole ${c[0]}: the bias stays kid-capped (${r.info.bias} rad <= 0.08)`);
+      ok(r.pv.dev >= 0 && r.pv.dev <= 5,
+        `hole ${c[0]}: ARC = TRUTH on sloped ground — preview lands ${r.pv.dev} yds from the flight (<= 5)`);
+    }
+    // Pro biases harder than Amateur off the same lie
+    const proBias = await page.eval(`(() => { const a = __fc.lieInfo().bias;
+      const d = __fc.diff(); DIFF = 'pro'; const p = __fc.lieInfo().bias; DIFF = d;
+      return [a, p]; })()`);
+    ok(Math.abs(proBias[1]) > Math.abs(proBias[0]) * 1.2,
+      `PRO works the sidehill harder (${proBias[0]} -> ${proBias[1]} rad)`);
+
+    /* ── 6. ELEVATION-AWARE HUD + club suggestion ── */
+    await goHole(18);
+    const upH = await page.eval(`JSON.parse(JSON.stringify((() => {
+      __fc.teleport(...__fc.clWorld(__fc.holeLen() - 150, 0));
+      return { txt: __fc.shotText(), dist: __fc.dist(), rise: __fc.lieInfo().rise, club: __fc.club() };
+    })()))`);
+    console.log('  18 uphill HUD:', JSON.stringify(upH));
+    ok(upH.rise >= 5, `18: the pin sits ${upH.rise.toFixed(1)} yds above the ball`);
+    ok(/▲\d+/.test(upH.txt), `18: the HUD shows the uphill delta ("${upH.txt.replace(/\s+/g, ' ').trim()}")`);
+    await goHole(10);
+    const dnH = await page.eval(`JSON.parse(JSON.stringify((() => {
+      __fc.teleport(...__fc.clWorld(__fc.holeLen() - 150, 0));
+      return { txt: __fc.shotText(), dist: __fc.dist(), rise: __fc.lieInfo().rise, club: __fc.club() };
+    })()))`);
+    console.log('  10 downhill HUD:', JSON.stringify(dnH));
+    ok(dnH.rise <= -5, `10: the pin sits ${(-dnH.rise).toFixed(1)} yds below the ball`);
+    ok(/▼\d+/.test(dnH.txt), `10: the HUD shows the downhill delta ("${dnH.txt.replace(/\s+/g, ' ').trim()}")`);
+    // and the delta STAYS QUIET when it is not worth a club: 3 rises only
+    // 7 yds over 350, so from the middle of the fairway it is inside the band
+    await goHole(3);
+    const quiet = await page.eval(`JSON.parse(JSON.stringify((() => {
+      __fc.teleport(...__fc.clWorld(__fc.holeLen() - 60, 0));
+      return { txt: __fc.shotText(), rise: __fc.lieInfo().rise };
+    })()))`);
+    console.log('  3 gentle HUD:', JSON.stringify(quiet));
+    ok(Math.abs(quiet.rise) < 5 && !/[\u25b2\u25bc]/.test(quiet.txt),
+      `the delta stays off when it is not worth a club (3: ${quiet.rise.toFixed(1)} yds, no marker)`);
+    const order = CLUB_ORDER.indexOf(upH.club) < CLUB_ORDER.indexOf(dnH.club);
+    ok(order, `the suggestion takes more club uphill than down from the same 150 yds (${dnH.club} down / ${upH.club} up)`);
+
+    /* ── 7. GREEN COMPLEXES: the diagonal, the terraces, the feeder ── */
+    await goHole(12);
+    const g12 = await page.eval('JSON.parse(JSON.stringify(__fc.green()))');
+    ok(g12.grx > g12.grz * 1.8, `12 Golden Bell: shallow and wide (${g12.grx.toFixed(1)} x ${g12.grz.toFixed(1)})`);
+    const diag = await page.eval(`(() => { const g = __fc.green();
+      const ap = __fc.clWorld(__fc.holeLen() - 40, 0);
+      const app = Math.atan2(g.x - ap[0], g.z - ap[1]);
+      const axis = Math.atan2(g.tx, g.tz);
+      let d = Math.abs(((axis - app) * 180 / Math.PI + 540) % 360 - 180);
+      return +d.toFixed(1); })()`);
+    ok(diag > 12, `12: the green is set DIAGONALLY to the approach (${diag} deg off the line)`);
+    await goHole(14);
+    const ter = await page.eval(`JSON.parse(JSON.stringify((() => {
+      const prof = [];
+      for (let a = -12; a <= 12; a += 1.5) { const w = __fc.greenWorld(0, a); prof.push(+__fc.groundH(w[0], w[1]).toFixed(2)); }
+      let risers = 0;
+      for (let i = 1; i < prof.length; i++) if (prof[i] - prof[i-1] > 0.22) risers++;
+      return { prof, risers, rise: +(prof[prof.length-1] - prof[0]).toFixed(2) };
+    })()))`);
+    console.log('  hole 14 terraces:', JSON.stringify(ter));
+    ok(ter.rise > 1.4, `14 Chinese Fir: the green climbs ${ter.rise} yds front to back`);
+    ok(ter.risers >= 3, `14: it climbs in TERRACES — ${ter.risers} riser samples between flat shelves`);
+    await goHole(16);
+    const feed = await page.eval(`JSON.parse(JSON.stringify((() => {
+      const g = __fc.green(), pinL = __fc.greenLoc(__fc.pin().x, __fc.pin().z), out = [];
+      for (const lat of [5, 8]) {
+        const p = __fc.greenWorld(lat, 0);
+        const r = __fc.rollFrom(p[0], p[1], 0, 0);
+        const l = __fc.greenLoc(r.x, r.z);
+        out.push({ lat, restLat: +l[0].toFixed(2), t: r.t, surf: r.surf,
+          dPin: +Math.hypot(l[0]-pinL[0], l[1]-pinL[1]).toFixed(2),
+          dPin0: +Math.hypot(lat-pinL[0], 0-pinL[1]).toFixed(2) });
+      }
+      return { pinLat: +pinL[0].toFixed(2), out };
+    })()))`);
+    console.log('  hole 16 feeder:', JSON.stringify(feed));
+    ok(feed.pinLat < -3, `16 Redbud: the Sunday pin is cut left (lat ${feed.pinLat})`);
+    for (const r of feed.out) {
+      ok(r.restLat < r.lat - 4, `16: a ball resting right (lat ${r.lat}) FEEDS left to ${r.restLat}`);
+      ok(r.dPin < r.dPin0, `16: the feeder carries it TOWARD the pin (${r.dPin0} -> ${r.dPin} yds)`);
+    }
+
+    /* ── 8. LANDING-AREA WIDTHS: tight where the reward is ── */
+    await goHole(1);
+    const widths = await page.eval(`JSON.parse(JSON.stringify((() => {
+      const L = __fc.holeLen(), w = [];
+      for (const f of [0.1, 0.3, 0.58, 0.75, 0.95]) w.push(+__fc.fwAt(f * L).toFixed(1));
+      return w;
+    })()))`);
+    console.log('  hole 1 fairway halfwidths:', JSON.stringify(widths));
+    ok(Math.max(...widths) - Math.min(...widths) >= 3,
+      `1: the landing area pinches (${Math.min(...widths)} yds) and widens again (${Math.max(...widths)} yds)`);
+
+    /* ── 9. THE TERMINATION LAW, all 18 holes ── */
+    const sweep = await page.eval('JSON.parse(JSON.stringify(__fc.rollSweep()))');
+    globalThis.__fc7roll = sweep;
+    console.log('  roll-termination sweep:', sweep.map(s => `#${s.hole}:${s.worst}s`).join(' '));
+    const worst = sweep.reduce((a, b) => (b.worst > a.worst ? b : a));
+    ok(sweep.every(s => s.worst <= 12),
+      `every hole: a ball on the steepest cant comes to rest <= 12 s (worst ${worst.worst}s on #${worst.hole} — ${worst.where})`);
+    ok(sweep.every(s => s.capped === 0),
+      'no release anywhere needed the 11 s hard floor — the turf stops them honestly');
+
+    ok(page.errors.length === 0, 'ZERO console errors across part H' +
+      (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
+  } finally { await page.close(); }
+}
+const sp2 = r => `${r.sp} yd/s`;
+
+/* `node --experimental-websocket test/harness.mjs [A|B|…|H]` runs one part
+   while iterating; no argument runs the whole standard (the default). */
+const ONLY = (process.argv[2] || '').toUpperCase();
+const run = (letter, fn) => (!ONLY || ONLY === letter ? fn() : Promise.resolve());
 try {
-  await partA();
-  await partB();
-  await partC();
-  await partD();
-  await partE();
-  await partF();
-  await partG();
+  await run('A', partA);
+  await run('B', partB);
+  await run('C', partC);
+  await run('D', partD);
+  await run('E', partE);
+  await run('F', partF);
+  await run('G', partG);
+  await run('H', partH);
 } catch (e) {
   console.error('\nHARNESS THREW:', e.message);
   process.exitCode = 1;
@@ -721,6 +971,20 @@ try {
   await srv.close();
 }
 const good = T.summary();
+if (globalThis.__fc7elev) {
+  console.log('\nFC-7 per-hole elevation (yds, tee = 0):');
+  console.log('  ##  name              par  yds    tee   green     low    high  relief   cant  crown');
+  for (const r of globalThis.__fc7elev) {
+    console.log(`  ${String(r.hole).padStart(2)}  ${r.name.padEnd(16)}  ${r.par}   ${String(r.yds).padStart(3)}` +
+      `  ${String(r.tee).padStart(5)}  ${String(r.green).padStart(6)}  ${String(r.lo).padStart(6)}  ${String(r.hi).padStart(6)}` +
+      `  ${String(r.relief).padStart(6)}  ${String(r.cant).padStart(5)}  ${r.crown}`);
+  }
+}
+if (globalThis.__fc7roll) {
+  const w = globalThis.__fc7roll.reduce((a, b) => (b.worst > a.worst ? b : a));
+  console.log(`\nFC-7 roll termination: worst ${w.worst}s (hole ${w.hole}, ${w.where}); hard-floor hits ` +
+    globalThis.__fc7roll.reduce((a, b) => a + b.capped, 0));
+}
 if (globalThis.__sweep) {
   console.log('\n18-hole build sweep (ms):');
   console.log(globalThis.__sweep.map(s => `  hole ${String(s.hole).padStart(2)}: ${s.ms}`).join('\n'));
