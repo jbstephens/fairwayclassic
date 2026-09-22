@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-7-SAUCE';
+const BUILD_TAG = 'FC-8-RAIN';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -194,7 +194,26 @@ function clubV(c, carry) {
                            balls back down the hill (9).
      green.pin  [lat, along]              a hand-set hole location where the
                            complex is the point (9 back shelf, 16 Sunday).
-     green.mound yds       mounding ringing the green complex.            */
+     green.mound yds       mounding ringing the green complex.
+
+   ═══ FC-8 — fairways that feel like land ═══
+   FC-7 gave the corridor macro elevation + cant; play rarely surfaced it
+   because the mid-scale land was still smooth.  FC-8 adds the meso layer to
+   the SAME analytic field (mesh == physics, always):
+
+     und    {kind, amp, wl}   the per-hole undulation character.  `amp` is
+                           peak-to-trough RELIEF in yards (0.8–2.2), `wl`
+                           the dominant wavelength in yards (18–45).  kind:
+                             'roll'   swales and rolls          (5/14/17…)
+                             'ripple' tight chattery ground     (7)
+                             'swoop'  long waves under the cant (10/11/13)
+                             'bench'  stepped shelves + risers  (2/8)
+                           Deterministic (seeded per hole) and gradient-
+                           capped so the corridor never out-tilts the cant.
+     hol    [[d, off, r, a]]  collection hollows / mounds in the environs:
+                           a < 0 GATHERS (a pulled drive funnels in), a > 0
+                           sheds.  2–3 per hole, set near the landing zones
+                           and just off the short grass.                  */
 const HOLES = [
   /* FC-5: club: [d, off] plants THE clubhouse (cupola + veranda + live oak)
      on the holes that see it (1 tee, 9 green, 18 approach); cabins: true
@@ -204,6 +223,8 @@ const HOLES = [
   { n: 1, name: 'Tea Olive', par: 4, yds: 445, bend: [[0.56, 24]], fw: 15,
     elv: [[0, 0], [0.55, 8.5], [0.8, 7], [1, 5]],
     cant: [[0, -0.02], [0.55, 0.04], [1, 0.025]], crown: 0.8, funnel: 1.0,
+    und: { kind: 'roll', amp: 1.6, wl: 34 },
+    hol: [[266, -20, 14, -2.5], [300, 24, 13, 1.1], [368, -21, 13, -2.2]],
     fwv: [[0, 16], [0.58, 11.5], [0.75, 15], [1, 15]],
     bunkers: [[292, 21, 13, 9], [330, 19, 10, 7]], water: [], club: [64, -40],
     green: { r: 12, sx: -0.022, sz: -0.016, ang: -12, mound: 1.3,
@@ -213,6 +234,8 @@ const HOLES = [
   { n: 2, name: 'Pink Dogwood', par: 5, yds: 575, bend: [[0.52, -20]], fw: 17,
     elv: [[0, 0], [0.12, -3], [0.35, -8], [0.7, -15], [1, -20]],
     cant: [[0, 0.015], [0.5, 0.055], [1, 0.03]], crown: 0.7, funnel: 1.1,
+    und: { kind: 'bench', amp: 2.0, wl: 38 },
+    hol: [[292, 23, 15, -2.5], [452, -22, 14, -2.3], [512, 20, 12, 1.2]],
     fwv: [[0, 18], [0.5, 13], [0.72, 18], [1, 16]],
     bunkers: [[548, -13, 9, 7], [552, 14, 9, 7], [330, -19, 12, 9]], water: [],
     green: { r: 13, sx: 0.02, sz: -0.014, ang: 10, mound: 1.4,
@@ -222,6 +245,8 @@ const HOLES = [
   { n: 3, name: 'Flowering Peach', par: 4, yds: 350, bend: [], fw: 14,
     elv: [[0, 0], [0.55, 2.5], [1, 7]],
     cant: [[0, 0.02], [1, 0.03]], crown: 1.0, funnel: 1.1,
+    und: { kind: 'roll', amp: 1.3, wl: 26 },
+    hol: [[196, -19, 12, -2.2], [252, 21, 12, -2]],
     fwv: [[0, 15], [0.62, 10], [1, 13]],
     bunkers: [[238, -20, 10, 8], [252, -24, 9, 7], [266, -19, 9, 7], [280, -24, 8, 6]],
     water: [], green: { r: 9, sx: 0.018, sz: 0.024, ang: -8, mound: 1.25,
@@ -230,6 +255,8 @@ const HOLES = [
   { n: 4, name: 'Flowering Crab', par: 3, yds: 240, bend: [], fw: 9,
     elv: [[0, 0], [0.55, -3], [1, -5.5]],
     cant: [[0, 0], [1, -0.03]], crown: 0.5, funnel: 0.9,
+    und: { kind: 'roll', amp: 1.1, wl: 24 },
+    hol: [[150, -17, 12, -2.1], [186, 18, 11, 1]],
     bunkers: [[218, 13, 10, 8], [226, -15, 9, 8]], water: [],
     green: { r: 12, sx: -0.02, sz: 0.018, ang: 14, mound: 1.3,
       lobes: [[-3.5, 3, 6.5, 0.45], [3.5, -3, 6, -0.35]] }, tclump: [[120, 32, 22, 10]] },
@@ -237,6 +264,10 @@ const HOLES = [
   { n: 5, name: 'Magnolia', par: 4, yds: 495, bend: [[0.5, -18]], fw: 15,
     elv: [[0, 0], [0.45, 4], [1, 13]],
     cant: [[0, 0.03], [0.55, 0.05], [1, 0.035]], crown: 0.8, funnel: 1.0,
+    /* 5 MAGNOLIA — the rolling one.  A pulled drive gathers into the big
+       left-hand swale short of the bunkers (FC-8's collection-hollow case). */
+    und: { kind: 'roll', amp: 2.2, wl: 32 },
+    hol: [[268, -22, 15, -2.9], [230, 22, 13, 1.1], [372, -20, 13, -2.2]],
     fwv: [[0, 16], [0.55, 11], [0.78, 15], [1, 14]],
     bunkers: [[300, -20, 14, 9], [318, -22, 12, 8]], water: [],
     green: { r: 12, sx: 0.016, sz: -0.024, ang: -10, mound: 1.25,
@@ -246,6 +277,8 @@ const HOLES = [
   { n: 6, name: 'Juniper', par: 3, yds: 180, bend: [], fw: 8,
     elv: [[0, 0], [0.11, -4], [0.45, -15], [0.8, -18], [1, -12]],
     cant: [[0, 0], [1, -0.035]], crown: 0.4, funnel: 1.2,
+    und: { kind: 'roll', amp: 1.1, wl: 22 },
+    hol: [[112, -18, 12, -2.1], [138, 18, 11, 1]],
     bunkers: [[164, 14, 11, 8]], water: [],
     green: { r: 13, sx: -0.024, sz: 0.016, ang: 16, mound: 1.3,
       lobes: [[-4, 3.5, 7, 0.55], [4, -3, 6.5, -0.42]] }, tclump: [[90, -26, 20, 10]] },
@@ -253,6 +286,9 @@ const HOLES = [
   { n: 7, name: 'Pampas', par: 4, yds: 450, bend: [], fw: 11,
     elv: [[0, 0], [0.5, 1.5], [1, 6]],
     cant: [[0, 0.02], [1, 0.025]], crown: 1.3, funnel: 1.3,
+    /* 7 PAMPAS — tight chattery ripple: the chute never gives a flat lie */
+    und: { kind: 'ripple', amp: 1.0, wl: 18 },
+    hol: [[262, -16, 12, -2.2], [300, 16, 11, 1.2], [386, -15, 11, -2]],
     fwv: [[0, 12], [0.6, 9], [1, 11]],
     bunkers: [[418, -10, 9, 7], [424, 0, 9, 7], [418, 10, 9, 7]], water: [],
     green: { r: 10, sx: 0.014, sz: 0.026, ang: 0, mound: 1.3,
@@ -261,6 +297,8 @@ const HOLES = [
   { n: 8, name: 'Yellow Jasmine', par: 5, yds: 570, bend: [[0.6, 10]], fw: 16,
     elv: [[0, 0], [0.35, 5], [0.7, 13], [1, 21]],
     cant: [[0, -0.03], [0.5, -0.055], [1, -0.03]], crown: 0.8, funnel: 1.0,
+    und: { kind: 'bench', amp: 2.0, wl: 40 },
+    hol: [[300, -22, 15, -2.5], [452, 22, 14, -2.3], [510, -20, 13, 1.2]],
     fwv: [[0, 17], [0.48, 12], [0.7, 17], [1, 15]],
     bunkers: [[275, 20, 14, 10], [452, -18, 12, 8]], water: [],
     green: { r: 12, sx: -0.016, sz: -0.02, ang: 8, mound: 1.3,
@@ -270,6 +308,8 @@ const HOLES = [
   { n: 9, name: 'Carolina Cherry', par: 4, yds: 460, bend: [[0.45, -14]], fw: 15,
     elv: [[0, 0], [0.45, -13], [0.78, -7], [1, 9]],
     cant: [[0, -0.02], [0.5, 0.045], [1, 0.02]], crown: 0.8, funnel: 1.0,
+    und: { kind: 'roll', amp: 1.7, wl: 33 },
+    hol: [[258, 21, 14, -2.4], [300, -21, 13, -2.2], [372, 20, 12, 1.1]],
     fwv: [[0, 16], [0.55, 12], [0.8, 16], [1, 14]],
     bunkers: [[420, -16, 11, 8], [438, -18, 10, 7]], water: [], club: [490, 12],
     green: { r: 11, sx: 0.016, sz: 0.028, ang: -6, mound: 0.8,
@@ -282,6 +322,10 @@ const HOLES = [
   { n: 10, name: 'Camellia', par: 4, yds: 495, bend: [[0.4, -22]], fw: 16,
     elv: [[0, 0], [0.09, -5], [0.32, -15], [0.62, -24], [1, -31]],
     cant: [[0, 0.035], [0.35, 0.095], [0.8, 0.085], [1, 0.055]], crown: 0.5, funnel: 1.3,
+    /* 10 CAMELLIA — long swooping waves UNDER the cant: the drive lands on a
+       falling shoulder and releases forever (FC-8's downslope-rollout case) */
+    und: { kind: 'swoop', amp: 2.2, wl: 44 },
+    hol: [[300, 24, 15, -2.6], [252, -23, 14, -2.3], [398, 22, 13, 1.2]],
     fwv: [[0, 17], [0.45, 14], [0.75, 19], [1, 16]],
     bunkers: [[330, 18, 13, 9]], water: [], cabins: true,
     green: { r: 13, sx: -0.02, sz: 0.018, ang: 12, mound: 1.3,
@@ -291,6 +335,8 @@ const HOLES = [
   { n: 11, name: 'White Dogwood', par: 4, yds: 520, bend: [[0.5, -8]], fw: 16,
     elv: [[0, 0], [0.14, -3], [0.4, -9], [0.75, -15], [1, -19]],
     cant: [[0, 0.02], [0.5, 0.06], [1, 0.055]], crown: 0.6, funnel: 1.0,
+    und: { kind: 'swoop', amp: 1.9, wl: 40 },
+    hol: [[288, 23, 15, -2.5], [420, -22, 14, -2.2], [466, 21, 13, 1.1]],
     fwv: [[0, 17], [0.5, 13], [0.78, 17], [1, 15]],
     bunkers: [[510, 17, 10, 7]],
     water: [{ t: 'pond', d: 505, off: -24, rx: 20, rz: 15 }],
@@ -301,6 +347,8 @@ const HOLES = [
   { n: 12, name: 'Golden Bell', par: 3, yds: 155, bend: [], fw: 8,
     elv: [[0, 0], [0.55, -6], [0.8, -7], [1, -5]],
     cant: [[0, 0], [1, 0.03]], crown: 0.3, funnel: 0.8,
+    und: { kind: 'roll', amp: 0.9, wl: 20 },
+    hol: [[96, -16, 11, -1.9], [110, 16, 10, 1]],
     bunkers: [[139, 2, 10, 5], [168, -8, 8, 5], [172, 9, 8, 5]],
     water: [{ t: 'creek', d: 126, w: 12 }],
     green: { r: 13, gex: 1.7, sx: -0.016, sz: 0.02, ang: 34, mound: 1.25,
@@ -311,6 +359,10 @@ const HOLES = [
   { n: 13, name: 'Azalea', par: 5, yds: 545, bend: [[0.45, -26]], fw: 16,
     elv: [[0, 0], [0.45, -4], [0.8, -7], [1, -8]],
     cant: [[0, 0.035], [0.45, 0.095], [0.85, 0.085], [1, 0.05]], crown: 0.4, funnel: 1.2,
+    /* 13 AZALEA — swooping waves layered on the hardest cant on the course:
+       a sidehill landing kicks and curls low-side, toward the creek */
+    und: { kind: 'swoop', amp: 2.2, wl: 42 },
+    hol: [[292, 25, 15, -2.6], [352, -24, 14, -2.3], [462, 23, 13, 1.2]],
     fwv: [[0, 18], [0.5, 15], [0.8, 20], [1, 16]],
     bunkers: [[556, -10, 9, 6], [558, 2, 9, 6], [556, 13, 8, 6], [563, -3, 8, 5]],
     water: [{ t: 'creek', d: 520, w: 10 }],
@@ -321,6 +373,8 @@ const HOLES = [
   { n: 14, name: 'Chinese Fir', par: 4, yds: 440, bend: [[0.5, -10]], fw: 15,
     elv: [[0, 0], [0.5, 4], [1, 10]],
     cant: [[0, -0.025], [0.55, -0.05], [1, -0.03]], crown: 0.9, funnel: 1.2,
+    und: { kind: 'roll', amp: 2.1, wl: 30 },
+    hol: [[254, -21, 14, -2.6], [296, 21, 13, 1.1], [356, -20, 13, -2.2]],
     fwv: [[0, 17], [0.55, 12], [1, 15]],
     bunkers: [], water: [],
     green: { r: 13, sx: -0.028, sz: 0.012, ang: -8, mound: 1.35,
@@ -331,6 +385,8 @@ const HOLES = [
   { n: 15, name: 'Firethorn', par: 5, yds: 550, bend: [], fw: 17,
     elv: [[0, 0], [0.45, -5], [0.85, -11], [1, -9]],
     cant: [[0, -0.02], [0.5, -0.045], [1, -0.03]], crown: 0.7, funnel: 1.0,
+    und: { kind: 'roll', amp: 1.8, wl: 36 },
+    hol: [[298, -23, 15, -2.5], [440, 22, 14, -2.2], [498, -20, 13, 1.1]],
     fwv: [[0, 18], [0.5, 14], [0.8, 19], [1, 16]],
     bunkers: [[540, 22, 10, 8], [352, -20, 12, 9]],
     water: [{ t: 'pond', d: 516, off: -2, rx: 26, rz: 12 }],
@@ -341,6 +397,8 @@ const HOLES = [
   { n: 16, name: 'Redbud', par: 3, yds: 170, bend: [], fw: 0,
     elv: [[0, 0], [0.5, -4], [1, -6]],
     cant: [[0, 0], [1, 0.03]], crown: 0.3, funnel: 0.9,
+    und: { kind: 'roll', amp: 0.9, wl: 22 },
+    hol: [[140, 20, 11, -1.9], [158, -20, 11, 1]],
     bunkers: [[152, 16, 10, 7], [172, -16, 9, 7]],
     water: [{ t: 'pond', d: 95, off: -6, rx: 34, rz: 50 }],
     green: { r: 13, sx: 0.035, sz: 0.01, ang: -10, mound: 1.2,
@@ -348,13 +406,21 @@ const HOLES = [
          cannot hold a ball on it — land right and it trickles down to the
          Sunday pin, which sits on the gentle shelf at the bottom */
       tiers: [[1, 0, 5.0, 2.3, 14]],
-      pin: [-5.6, 1.4],
+      /* FC-8 pin sanity: the Sunday pin belongs in the LOW-LEFT GATHER the
+         feeder feeds toward — the reward spot.  The old [-5.6, 1.4] sat on
+         the shoulder of the left greenside bunker, so every 5-footer broke
+         away from it beside the sand.  The feeder slope itself is unchanged;
+         placePin() re-validates this (and every other pin) against the
+         green edge, the bunker lips and the gradient underfoot. */
+      pin: [-7.2, -3.4],
       lobes: [[-5, -1.5, 6.5, -0.28]] }, redbud: true,
     tclump: [[120, 34, 22, 10]] },
   /* 17 — NANDINA: a pronounced RIDGE runs the fairway; both sides fall away */
   { n: 17, name: 'Nandina', par: 4, yds: 440, bend: [], fw: 14,
     elv: [[0, 0], [0.55, 4], [1, 9]],
     cant: [[0, 0.01], [1, 0.015]], crown: 2.0, funnel: 1.4,
+    und: { kind: 'roll', amp: 2.0, wl: 28 },
+    hol: [[252, -19, 14, -2.5], [286, 19, 13, 1.1], [352, -18, 12, -2.1]],
     fwv: [[0, 15], [0.6, 11], [1, 14]],
     bunkers: [[412, -14, 10, 8], [416, 14, 10, 8]], water: [],
     green: { r: 11, sx: 0.016, sz: -0.02, ang: -6, mound: 1.25,
@@ -363,6 +429,8 @@ const HOLES = [
   { n: 18, name: 'Holly', par: 4, yds: 465, bend: [[0.55, 26]], fw: 14,
     elv: [[0, 0], [0.3, 4], [0.62, 10], [1, 23]],
     cant: [[0, 0.03], [0.55, 0.05], [1, 0.03]], crown: 0.9, funnel: 1.2,
+    und: { kind: 'roll', amp: 1.7, wl: 32 },
+    hol: [[292, -19, 14, -2.4], [330, 22, 13, 1.1], [398, -18, 12, -2.1]],
     fwv: [[0, 15], [0.55, 10.5], [0.8, 15], [1, 14]],
     bunkers: [[252, 16, 11, 8], [268, 20, 10, 7], [438, -13, 9, 7], [452, 12, 9, 7]],
     water: [], club: [494, -16],

@@ -24,7 +24,12 @@ const SHOT = {
   power: 0, meterV: 0, meterDir: 1,
   arcDirty: true, landX: 0, landZ: 0, puttMax: 20,
   bias: 0, cross: 0,          // FC-7: the live sidehill-lie read
+  restX: 0, restZ: 0, rollLen: 0,   // FC-8: the predicted rollout
 };
+/* FC-8: a preview / witness sim borrows the REAL tickBall.  QUIET mutes the
+   side effects that only belong to a shot the player actually hit (sound,
+   sand puffs, splashes) so arc = truth costs nothing in the theatre. */
+let QUIET = 0;
 function meterSpeed() { return DIFF === 'pro' ? 130 : 92; }   // pct per second
 
 function distToPin(x, z) { return Math.hypot(PIN.x - x, PIN.z - z); }
@@ -112,6 +117,22 @@ function pathPush(x, y, z) {
   FLIGHT.pathN++;
 }
 
+/* ═══ FC-8: DRIVES RIDE THE LAND ═══
+   How much a shot RUNS after it lands is the club's business, not the
+   turf's alone.  A driver arrives shallow and hot off a low-spin face and
+   releases with the contour; a wedge drops steep with spin and checks up.
+   runK scales the horizontal speed kept through the touch AND how hard the
+   touch reads the slope under it, so a drive onto 10's falling shoulder
+   gains another 25 yards while the 8-iron into a green still stops.
+   Greens are EXEMPT (FC-7's green behaviour is law) — see tickBall. */
+function runKFor(ci) {
+  return ci === 0 ? 1.34        // DR
+       : ci <= 2 ? 1.22         // 3W / 5W
+       : ci <= 4 ? 1.10         // 4i / 5i
+       : ci <= 6 ? 1.02         // 6i / 7i
+       : ci <= 8 ? 0.94         // 8i / 9i
+       : 0.86;                  // PW / SW — the scoring clubs sit down
+}
 function launchShot(p, power) {
   const c = CLUBS[SHOT.club];
   const mul = lieMul(p.lie);
@@ -124,6 +145,8 @@ function launchShot(p, power) {
   if (p.lie === 4) ang += (Math.random() - 0.5) * 0.07;
   FLIGHT.on = true; FLIGHT.mode = 'fly'; FLIGHT.t = 0; FLIGHT.treeCool = 0; FLIGHT.touches = 0;
   FLIGHT.rollT = 0;
+  FLIGHT.runK = runKFor(SHOT.club);
+  FLIGHT.touchX = 0; FLIGHT.touchZ = 0; FLIGHT.touchG = 0; FLIGHT.touchSurf = -1;
   FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y + 0.2; FLIGHT.z = p.ball.z;
   const ch = Math.cos(loft) * v;
   FLIGHT.vx = Math.sin(ang) * ch;
@@ -132,7 +155,7 @@ function launchShot(p, power) {
   FLIGHT.peakY = FLIGHT.y;
   FLIGHT.pathN = 0; FLIGHT.power = power;
   pathPush(FLIGHT.x, FLIGHT.y, FLIGHT.z);
-  if (p.lie === 4) { SFX.sand(); burst(psSand, FLIGHT.x, FLIGHT.y, FLIGHT.z, 14, 1.2, 1.1); }
+  if (p.lie === 4 && !QUIET) { SFX.sand(); burst(psSand, FLIGHT.x, FLIGHT.y, FLIGHT.z, 14, 1.2, 1.1); }
 }
 function launchPutt(p, power) {
   const rollDist = Math.max(0.8, SHOT.puttMax * power);
@@ -143,6 +166,7 @@ function launchPutt(p, power) {
   FLIGHT.vx = Math.sin(SHOT.aimAng) * v0;
   FLIGHT.vz = Math.cos(SHOT.aimAng) * v0;
   FLIGHT.vy = 0;
+  FLIGHT.runK = 1;
   FLIGHT.pathN = 0; FLIGHT.power = power;
 }
 function greenMu() { return DIFF === 'pro' ? 0.92 : 1.12; }
@@ -165,7 +189,13 @@ function slopeK(s) {
     case 3: return 7.6;
     case 1: case 6: return 7.2;
     case 4: return 2.4;
-    default: return 4.2;
+    /* FC-8: the ROUGH reads its own contour harder than FC-7 let it (4.2).
+       The environs are SHAPED now — collection hollows and mounding — and a
+       shoulder that kills the ball the instant it lands turns every one of
+       them back into the uniform strip of rough John was looking past.  It
+       still grabs (mu 6.5 untouched); it just lets the land steer on the
+       way down. */
+    default: return 5.2;
   }
 }
 /* …and the steepest gradient each surface can HOLD a ball on.  Gentler than
@@ -214,7 +244,7 @@ function tickBall() {
         const dx = FLIGHT.x - t.x, dz = FLIGHT.z - t.z;
         if (dx * dx + dz * dz > t.cr * t.cr) continue;
         if (FLIGHT.y < t.cy0 || FLIGHT.y > t.cy1) continue;
-        SFX.rustle();
+        if (!QUIET) SFX.rustle();
         FLIGHT.vx *= 0.22; FLIGHT.vz *= 0.22;
         FLIGHT.vy = Math.min(FLIGHT.vy, -3);
         FLIGHT.treeCool = 0.5;
@@ -228,8 +258,7 @@ function tickBall() {
       if (s === 5) return waterIn();
       const speed = Math.hypot(FLIGHT.vx, FLIGHT.vz);
       if (s === 4) {   // plugs in sand
-        SFX.sand();
-        burst(psSand, FLIGHT.x, g + 0.2, FLIGHT.z, 16, 1.4, 1.2);
+        if (!QUIET) { SFX.sand(); burst(psSand, FLIGHT.x, g + 0.2, FLIGHT.z, 16, 1.4, 1.2); }
         FLIGHT.vx *= 0.12; FLIGHT.vz *= 0.12; FLIGHT.vy = 0;
         FLIGHT.mode = 'roll';
         return { ev: 'landed', surf: s };
@@ -240,18 +269,45 @@ function tickBall() {
       const keep = s === 2 ? (DIFF === 'pro' ? 0.17 : 0.11)
                  : s === 3 ? 0.18 : s === 0 ? 0.12 : 0.28;
       /* FC-7: the BOUNCE reads the ground too — land on a downslope and the
-         ball kicks on and runs; land into a rise and it stands up and dies. */
+         ball kicks on and runs; land into a rise and it stands up and dies.
+         FC-8: how hard it reads the ground, and how much speed survives at
+         all, now belong to the CLUB (runK).  A driver releases down the
+         hill; an approach iron checks up.  The GREEN is exempt: FC-7 tuned
+         it and the greens are not to move. */
       ballGrad(FLIGHT.x, FLIGHT.z, _gr);
       const hsp0 = Math.hypot(FLIGHT.vx, FLIGHT.vz) || 1;
       const gAlong = (_gr[0] * FLIGHT.vx + _gr[1] * FLIGHT.vz) / hsp0;
-      const kSlope = clamp(1 - gAlong * 2.4, 0.5, 1.85);
-      FLIGHT.vx *= keep * kSlope; FLIGHT.vz *= keep * kSlope;
+      const runK = s === 2 ? 1 : (FLIGHT.runK === undefined ? 1 : FLIGHT.runK);
+      const kSlope = clamp(1 - gAlong * (2.4 + (runK - 1) * 7.5), 0.5, 1.85 * runK);
+      if (FLIGHT.touches === 1) {
+        FLIGHT.touchX = FLIGHT.x; FLIGHT.touchZ = FLIGHT.z;
+        FLIGHT.touchG = gAlong; FLIGHT.touchSurf = s;
+        // the travel direction AT the pitch mark: the only honest frame for
+        // "did it kick low-side?" (a dogleg makes centreline-off lie)
+        FLIGHT.touchVX = FLIGHT.vx / hsp0; FLIGHT.touchVZ = FLIGHT.vz / hsp0;
+      }
+      FLIGHT.vx *= keep * kSlope * runK; FLIGHT.vz *= keep * kSlope * runK;
+      /* …and the SIDEWAYS KICK.  FC-7's touch only read the slope along the
+         ball's line, so a drive pitching on 13's cant rolled off it politely
+         instead of kicking off it.  A ball landing on a side-slope deflects
+         AT the pitch mark, toward the low side, and the shallower the club
+         arrives the more it kicks.  Greens are exempt (FC-7 law). */
+      if (s !== 2 && s !== 4) {
+        const gCross = (_gr[0] * FLIGHT.vz - _gr[1] * FLIGHT.vx) / hsp0;  // + = rises right of travel
+        const th = clamp(gCross * 1.4 * runK, -0.3, 0.3);                 // + = deflect LEFT
+        if (th > 1e-4 || th < -1e-4) {
+          const cs2 = Math.cos(th), sn2 = Math.sin(th);
+          const nvx = FLIGHT.vx * cs2 - FLIGHT.vz * sn2;
+          const nvz = FLIGHT.vz * cs2 + FLIGHT.vx * sn2;
+          FLIGHT.vx = nvx; FLIGHT.vz = nvz;
+        }
+      }
       FLIGHT.vy = Math.min(3.5, -FLIGHT.vy * 0.25 * clamp(1 + gAlong * 1.6, 0.55, 1.4));
       if (FLIGHT.vy < 1.2 || FLIGHT.touches >= 2) {
         FLIGHT.vy = 0; FLIGHT.mode = 'roll';
         return { ev: 'landed', surf: s };
       }
-      SFX.bounce();
+      if (!QUIET) SFX.bounce();
       return { ev: 'bounce', surf: s };
     }
     if (FLIGHT.t > 30) { FLIGHT.on = false; return { ev: 'stopped' }; }   // failsafe
@@ -293,7 +349,7 @@ function tickBall() {
     const dot = FLIGHT.vx * nx + FLIGHT.vz * nz;
     FLIGHT.vx -= 1.6 * dot * nx; FLIGHT.vz -= 1.6 * dot * nz;
     FLIGHT.vx *= 0.55; FLIGHT.vz *= 0.55;
-    SFX.bounce();
+    if (!QUIET) SFX.bounce();
   }
   /* A ball only RESTS where the ground lets it: if the local gradient can
      still beat the turf, it keeps going (this is what makes 9's false
@@ -313,8 +369,8 @@ function tickBall() {
 
 /* water: splash + rewind along the recorded path for the drop */
 function waterIn() {
-  SFX.splash(); SFX.plunk();
-  burst(psSplash, FLIGHT.x, FLIGHT.y + 0.3, FLIGHT.z, 22, 1.6, 1.5);
+  if (!QUIET) { SFX.splash(); SFX.plunk();
+    burst(psSplash, FLIGHT.x, FLIGHT.y + 0.3, FLIGHT.z, 22, 1.6, 1.5); }
   const ex = FLIGHT.x, ez = FLIGHT.z;
   const dPinEntry = distToPin(ex, ez);
   let dropX = null, dropZ = null;
@@ -328,6 +384,37 @@ function waterIn() {
   }
   FLIGHT.on = false;
   return { ev: 'water', ex, ez, dropX, dropZ };
+}
+
+/* ═══ FC-8 — THE PREDICTED ROLLOUT ═══
+   ARC = TRUTH now has to include the release, so the preview does not
+   simulate the roll — it RUNS it.  The live FLIGHT record is saved, the
+   ball is handed to the real tickBall at its impact state (quietly), and
+   the path it takes to rest is exactly the path the struck ball will take.
+   Returns the rest point; fills `out` with the sampled path. */
+const _rollPath = [];
+function simulateRollout(x, y, z, vx, vy, vz, runK, out) {
+  const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+    vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+    pathN: FLIGHT.pathN, touches: FLIGHT.touches, runK: FLIGHT.runK, treeCool: FLIGHT.treeCool };
+  QUIET++;
+  FLIGHT.on = true; FLIGHT.mode = 'fly'; FLIGHT.t = 0; FLIGHT.rollT = 0;
+  FLIGHT.touches = 0; FLIGHT.treeCool = 1e6;      // the arc already flew the canopies
+  FLIGHT.runK = runK;
+  FLIGHT.x = x; FLIGHT.y = y; FLIGHT.z = z;
+  FLIGHT.vx = vx; FLIGHT.vy = vy; FLIGHT.vz = vz;
+  if (out) out.length = 0;
+  let n = 0;
+  for (; n < 1600 && FLIGHT.on; n++) {
+    const r = tickBall();
+    if (out && (n % 3 === 0)) out.push(FLIGHT.x, FLIGHT.y, FLIGHT.z);
+    if (r && (r.ev === 'stopped' || r.ev === 'holed' || r.ev === 'water')) break;
+  }
+  const rest = [FLIGHT.x, FLIGHT.y, FLIGHT.z];
+  if (out) out.push(rest[0], rest[1], rest[2]);
+  QUIET--;
+  for (const k in sv) FLIGHT[k] = sv[k];
+  return rest;
 }
 
 /* ── the aim preview (arc for clubs, line/curve for putts) ── */
@@ -351,6 +438,7 @@ function simulateArc(p) {
     let vy = Math.sin(loft) * v;
     const dt = DT;
     const samples = [];
+    let hit = null;
     for (let i = 0; i < 900; i++) {
       const spD = Math.hypot(vx, vy, vz);
       vy -= (GRAV + DRAG_K * spD * vy) * dt;
@@ -358,7 +446,11 @@ function simulateArc(p) {
       vz += (WIND.az - DRAG_K * spD * vz) * dt;
       x += vx * dt; y += vy * dt; z += vz * dt;
       samples.push(x, y, z);
-      if (vy < 0 && y <= groundH(x, z)) { land = [x, groundH(x, z), z]; break; }
+      if (vy < 0 && y <= groundH(x, z)) {
+        land = [x, groundH(x, z), z];
+        hit = [x, y, z, vx, vy, vz];
+        break;
+      }
     }
     const m = samples.length / 3;
     for (let i = 0; i < n; i++) {
@@ -367,7 +459,29 @@ function simulateArc(p) {
       arcPos[i * 3 + 1] = samples[si * 3 + 1] + 0.1;
       arcPos[i * 3 + 2] = samples[si * 3 + 2];
     }
+    /* …and the TAIL: from that exact impact state, the real touch-down and
+       roll model, to rest.  What the player sees is the release he gets. */
+    if (hit) {
+      const rest = simulateRollout(hit[0], hit[1], hit[2], hit[3], hit[4], hit[5],
+        runKFor(SHOT.club), _rollPath);
+      SHOT.restX = rest[0]; SHOT.restZ = rest[2];
+      SHOT.rollLen = Math.hypot(rest[0] - land[0], rest[2] - land[2]);
+      const rm = Math.max(1, _rollPath.length / 3);
+      for (let i = 0; i < ROLL_N; i++) {
+        const si = Math.min(rm - 1, Math.floor((i + 1) * rm / ROLL_N));
+        rollPos[i * 3] = _rollPath[si * 3];
+        rollPos[i * 3 + 1] = _rollPath[si * 3 + 1] + 0.12;
+        rollPos[i * 3 + 2] = _rollPath[si * 3 + 2];
+      }
+      rollGeo.attributes.position.needsUpdate = true;
+      restRing.position.set(rest[0], groundH(rest[0], rest[2]) + 0.1, rest[2]);
+    } else {
+      SHOT.restX = land ? land[0] : p.ball.x;
+      SHOT.restZ = land ? land[2] : p.ball.z;
+      SHOT.rollLen = 0;
+    }
   } else {
+    SHOT.rollLen = 0;
     // putt: Amateur = curved roll preview; Pro = straight line
     const dPin = distToPin(p.ball.x, p.ball.z);
     SHOT.puttMax = clamp(dPin * 2.5, 6, 90);

@@ -7,7 +7,7 @@
 //
 //   node --experimental-websocket test/look-verify.mjs [section]
 //   sections: budgets | flyover | cameras | map | flags | shots | fc7
-//             (default: all)
+//             fc8 (default: all)
 //
 // FC-7 adds `cameras` (camera comfort over the new relief — full unskipped
 // flyovers plus the address/chase cameras measured against the ground) and
@@ -96,7 +96,7 @@ const chrome = await launchChrome({ port: CDP });
 
 /* ════════ budgets: true GL calls/tris at address + flight, 4 holes ════════ */
 async function budgets() {
-  console.log('\n═══ LOOK budgets (true GL wrap) — holes 1, 6, 10, 13, 16, 18 ═══');
+  console.log('\n═══ LOOK budgets (true GL wrap) — holes 1, 5, 6, 10, 13, 16, 17, 18 ═══');
   const page = await openPage(CDP);
   try {
     await page.nav(`http://localhost:${HTTP}/`);
@@ -106,10 +106,11 @@ async function budgets() {
     await toAddress(page);
     await page.eval(GL_PROBE);
     const perHole = {};
-    // FC-7: the sample set is the terrain-drama set — the big downhill (10),
-    // the valley par 3 (6), the hard cant (13), the all-carry (16) and the
-    // uphill finish (18), plus 1 as the control.
-    for (const hn of [1, 6, 10, 13, 16, 18]) {
+    /* FC-7: the terrain-drama set — the big downhill (10), the valley par 3
+       (6), the hard cant (13), the all-carry (16) and the uphill finish
+       (18), plus 1 as the control.  FC-8 adds the two holes whose meso
+       layer works hardest: 5 (the rolling one) and 17 (the ridge). */
+    for (const hn of [1, 5, 6, 10, 13, 16, 17, 18]) {
       if (hn !== 1) await gotoHoleAddress(page, hn);
       await page.eval('__glProbe.reset()');
       await sleep(900);                             // busy address frames
@@ -446,6 +447,121 @@ async function fc7shots() {
   } finally { await page.close(); }
 }
 
+/* ════════ FC-8 — "the ground must read without a HUD" (test/shots/fc8/) ════════
+   The whole point of FC-8 is that a fairway looks like LAND at couch
+   distance.  These are taken with the HUD hidden on purpose: if the
+   corridor reads flat here, the bundle has not landed. */
+async function fc8shots() {
+  console.log('\n═══ FC-8 land shots ═══');
+  const DIR = path.join(ROOT, 'test', 'shots', 'fc8');
+  fs.mkdirSync(DIR, { recursive: true });
+  const page = await openPage(CDP);
+  const hudOff = () => page.eval(
+    `(() => { hudEl.style.display='none'; hintEl.style.display='none'; return 1; })()`);
+  try {
+    await page.nav(`http://localhost:${HTTP}/?fx=full`);
+    await page.connectPad(0);
+    await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title');
+    await toAddress(page);
+    await page.eval('__fc.setWind(0,0)');
+
+    /* mid-corridor with the HUD off — the GROUND has to do the talking */
+    for (const [hn, d, off] of [[5, 300, 2], [10, 300, 4], [14, 250, -3], [17, 250, 3]]) {
+      await gotoHoleAddress(page, hn);
+      await page.eval(`__fc.setWind(0,0); __fc.teleport(...__fc.clWorld(${d}, ${off}))`);
+      await sleep(800);
+      await hudOff();
+      await sleep(260);
+      await page.screenshot(path.join(DIR, `${String(hn).padStart(2, '0')}-fairway-nohud.png`));
+      gate(`hole ${hn}: mid-fairway shot taken with the HUD off`,
+        (await page.eval(`getComputedStyle(hudEl).display`)) === 'none');
+    }
+
+    /* the drive that rides the land: land / release / rest on 10 */
+    await gotoHoleAddress(page, 10);
+    await page.eval('__fc.setWind(0,0)');
+    await hudOff();
+    await page.pressPad('south');
+    await page.waitFor(`__fc.state()==='meter'`, 'meter', 5000);
+    for (let i = 0; i < 500; i++) {          // ~90% = the falling-shoulder pitch
+      const v = await page.eval('__fc.meter()');
+      if (v >= 87 && v <= 93) break;
+      await sleep(10);
+    }
+    await page.pressPad('south');
+    await page.waitFor('__fc.flightOn()', 'flight', 6000).catch(() => {});
+    /* three frames spaced by the ball's own SPEED, so the travel between
+       them is real ground covered (the chase cam follows the ball, so the
+       yardage shows in the landmarks, not in the ball's screen position) */
+    let shot = 0, wasRoll = false, at = [];
+    for (let i = 0; i < 1200; i++) {
+      const st = await page.eval(
+        `({ on: __fc.flightOn(), roll: FLIGHT.mode === 'roll', sp: Math.hypot(FLIGHT.vx, FLIGHT.vz), x: FLIGHT.x, z: FLIGHT.z })`);
+      if (st.on && st.roll && !wasRoll) {
+        wasRoll = true; at.push([st.x, st.z]);
+        await page.screenshot(path.join(DIR, '10-roll-1-land.png')); shot++;
+      } else if (wasRoll && shot === 1 && st.sp < 3.2) {
+        at.push([st.x, st.z]);
+        await page.screenshot(path.join(DIR, '10-roll-2-release.png')); shot++;
+      }
+      if (!st.on) { at.push([st.x, st.z]); break; }
+      await sleep(22);
+    }
+    await sleep(260);
+    await page.screenshot(path.join(DIR, '10-roll-3-rest.png'));
+    const trav = at.length >= 3
+      ? [Math.hypot(at[1][0] - at[0][0], at[1][1] - at[0][1]), Math.hypot(at[2][0] - at[1][0], at[2][1] - at[1][1])]
+      : [0, 0];
+    gate(`10: the drive-rollout sequence covers real ground (${trav[0].toFixed(1)} + ${trav[1].toFixed(1)} yds between frames)`,
+      shot >= 2 && trav[0] + trav[1] >= 8);
+    await page.waitFor(`['address','card'].includes(__fc.state()) && !__fc.flightOn()`, 'shot done', 60000).catch(() => {});
+
+    /* the stance on 13's cant */
+    await gotoHoleAddress(page, 13);
+    await page.eval('__fc.setWind(0,0); __fc.teleport(...__fc.clWorld(300, 10))');
+    await sleep(900);
+    const tl = await page.eval('JSON.parse(JSON.stringify(__fc.golferTilt()))');
+    await page.screenshot(path.join(DIR, '13-stance-cant.png'));
+    await clip(page, path.join(DIR, '13-stance-cant-detail.png'), 470, 320, 420, 390, 2);
+    gate(`13: the golfer is tilted on the cant at address (${tl.deg} deg)`, tl.deg > 1.5 && tl.deg <= 7.05);
+
+    /* the collection hollow on 5, framed from the short grass it gathers off */
+    await gotoHoleAddress(page, 5);
+    await page.eval(`(() => { __fc.setWind(0,0);
+      const h = __fc.hollows()[0];
+      const b = __fc.clWorld(h.d - 24, h.off + 15);
+      const f = __fc.clWorld(h.d + 10, h.off - 4);
+      __fc.teleport(b[0], b[1]);
+      // sight straight down the length of the bowl, from its near rim
+      SHOT.aimAng = Math.atan2(f[0] - b[0], f[1] - b[1]);
+      SHOT.arcDirty = true; camSnap();
+      return 1; })()`);
+    await sleep(1100);
+    await hudOff();
+    await page.screenshot(path.join(DIR, '05-collection-hollow.png'));
+    gate('5: the collection hollow framed from the short grass above it', true);
+
+    /* bunker mounding read from the fairway on 7 */
+    await gotoHoleAddress(page, 7);
+    await page.eval('__fc.setWind(0,0); __fc.teleport(...__fc.clWorld(388, 0))');
+    await sleep(900);
+    await hudOff();
+    await page.screenshot(path.join(DIR, '07-bunker-mounding.png'));
+    gate('7: the three front bunkers framed from the fairway', true);
+
+    /* and 18 must still read UPHILL */
+    await gotoHoleAddress(page, 18);
+    await page.eval('__fc.setWind(0,0); __fc.teleport(...__fc.clWorld(__fc.holeLen() - 135, 4))');
+    await sleep(900);
+    await hudOff();
+    await page.screenshot(path.join(DIR, '18-approach-uphill.png'));
+    const rise = await page.eval('__fc.lieInfo().rise');
+    gate(`18: the approach still climbs to the green (+${rise.toFixed(1)} yds)`, rise >= 5);
+
+    gate('fc8 shots: zero console errors', page.errors.length === 0, page.errors.slice(0, 3).join(' | '));
+  } finally { await page.close(); }
+}
+
 try {
   if (RUN('budgets')) await budgets();
   if (RUN('flyover')) await flyover();
@@ -454,6 +570,7 @@ try {
   if (RUN('flags')) await flags();
   if (RUN('shots')) await shots();
   if (RUN('fc7')) await fc7shots();
+  if (RUN('fc8')) await fc8shots();
 } catch (e) {
   console.error('\nLOOK-VERIFY THREW:', e.message);
   failures++;

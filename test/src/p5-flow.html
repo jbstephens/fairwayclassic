@@ -14,7 +14,7 @@ let flyRec = null;
 let swingT = 0, swingPower = 0, settleT = 0, bannerT = 0;
 let replayT = 0, replayActive = false;
 // birdseed beat (birdie cinematic): timeline + one-shot event flags
-const CIN_END = 5.7;
+const CIN_END = 6.0;
 let cinT = -1, cinPrev = -1;
 const CIN = { gx0: 0, gz0: 0, ax: 0, az: 0, bx: 0, bz: 0, camA: 0, fired: {} };
 let peekOn = false, greadOn = false;
@@ -48,6 +48,30 @@ function camGoal(ex, ey, ez, tx, ty, tz, k, dt) {
 }
 function setFov(f) {
   if (Math.abs(camera.fov - f) > 0.05) { camera.fov += (f - camera.fov) * 0.12; camera.updateProjectionMatrix(); }
+}
+
+/* ═══ FC-8: THE GOLFER FEELS THE LIE ═══
+   On a canted lie the figure stands ON the slope instead of plumb like a
+   lamppost planted in a hillside: the whole body rotates to the ground's
+   own normal, yaw first, tilt second.  Capped at TILT_MAX — readable at
+   couch distance, never comic.  The caddie stands on his own patch of
+   ground the same way. */
+const TILT_MAX = 7 * Math.PI / 180;
+const _tq = new THREE.Quaternion(), _tq2 = new THREE.Quaternion();
+const _tUp = new THREE.Vector3(0, 1, 0), _tZ = new THREE.Vector3(0, 0, 1), _tN = new THREE.Vector3();
+const _tg = [0, 0];
+const golferUp = [0, 1, 0];
+let golferTiltDeg = 0;
+function standOn(obj, x, z, yaw) {
+  ballGrad(x, z, _tg);
+  let gx = _tg[0], gz = _tg[1];
+  const mag = Math.hypot(gx, gz), tmax = Math.tan(TILT_MAX);
+  if (mag > tmax) { const k = tmax / mag; gx *= k; gz *= k; }
+  _tN.set(-gx, 1, -gz).normalize();
+  _tq.setFromUnitVectors(_tUp, _tN);
+  _tq2.setFromAxisAngle(_tUp, yaw);
+  obj.quaternion.copy(_tq).multiply(_tq2);
+  return Math.acos(clamp(_tN.y, -1, 1)) * 180 / Math.PI;
 }
 
 function activeP() { return PLAYERS[turn] || PLAYERS[0]; }
@@ -114,16 +138,23 @@ function refreshShotInfo() {
     (lie ? `<div class="lieline">${lie}</div>` : '');
   if (html !== _shotHtml) { _shotHtml = html; shotInfoEl.innerHTML = html; }
 }
+/* FC-8: the club panel now carries the RELEASE too — the number the tail on
+   the arc is drawing.  Cached: the address tick re-reads it as you aim. */
+let _clubNm = '', _clubTx = '';
 function refreshClub() {
   const p = activeP();
+  let nm, tx;
   if (SHOT.putter) {
-    clubNameEl.textContent = 'PUTTER';
-    clubCarryEl.textContent = 'roll ' + Math.round(SHOT.puttMax) + ' yds max';
+    nm = 'PUTTER';
+    tx = 'roll ' + Math.round(SHOT.puttMax) + ' yds max';
   } else {
     const c = CLUBS[SHOT.club];
-    clubNameEl.textContent = c.n;
-    clubCarryEl.textContent = Math.round(c.carry * lieMul(p.lie)) + ' yds carry';
+    nm = c.n;
+    tx = Math.round(c.carry * lieMul(p.lie)) + ' yds carry' +
+      (SHOT.rollLen > 1.5 ? ' · +' + Math.round(SHOT.rollLen) + ' ROLL' : '');
   }
+  if (nm !== _clubNm) { _clubNm = nm; clubNameEl.textContent = nm; }
+  if (tx !== _clubTx) { _clubTx = tx; clubCarryEl.textContent = tx; }
   clubHintEl.textContent = (SHOT.putter && p.lie === 2) ? '' : 'L1/R1 CLUB';
 }
 function refreshWind() {
@@ -567,7 +598,7 @@ function tickSim() {
         showHint('');
       } else if (IN.confirm && peekOn) { peekOn = false; showScreen(null); }
       if (IN.pause) enterPause();
-      if (SHOT.arcDirty) simulateArc(p);
+      if (SHOT.arcDirty) { simulateArc(p); refreshClub(); }
       break;
     }
     case 'greenread':
@@ -622,13 +653,22 @@ function tickSim() {
       cinT += DT;
       if (IN.confirm && cinT > 0.8) {          // skip: straight to the party,
         cinT = CIN_END;                         // muting the un-fired beats
-        for (const at of [1.9, 2.9, 3.95, 4.5, 4.9]) CIN.fired[at] = 1;
+        for (const at of [1.8, 2.15, 3.2, 4.2, 4.75, 5.2]) CIN.fired[at] = 1;
       }
-      cinFire(1.9, () => { burst(psSeed, PIN.x, PIN.y + 0.45, PIN.z, LOWFX ? 8 : 14, 0.4, 0.9); SFX.seeds(); });
-      cinFire(2.9, () => SFX.flutter());
-      cinFire(3.95, () => SFX.chirp());
-      cinFire(4.5, () => SFX.chirp());
-      cinFire(4.9, () => SFX.flutter());
+      // MAKE IT RAIN: seeds toss out of the raised hand and shower the cup
+      // for ~0.7s, a few per wrist flick (John: "the money shot")
+      if (cinT > 1.7 && cinT < 2.55 && simTick % 3 === 0) {
+        const hdx = PIN.x - CIN.ax, hdz = PIN.z - CIN.az;
+        const hl = Math.hypot(hdx, hdz) || 1;
+        const hx = CIN.ax + (hdx / hl) * 0.58, hz = CIN.az + (hdz / hl) * 0.58;
+        burst(psSeed, hx, groundH(hx, hz) + 1.66, hz, LOWFX ? 2 : 3, 1.15, 0.55);
+      }
+      cinFire(1.8, () => SFX.seeds());
+      cinFire(2.15, () => SFX.seeds());
+      cinFire(3.2, () => SFX.flutter());
+      cinFire(4.2, () => SFX.chirp());
+      cinFire(4.75, () => SFX.chirp());
+      cinFire(5.2, () => SFX.flutter());
       if (cinT >= CIN_END) endBirdieCin();
       break;
     }
@@ -674,7 +714,7 @@ function tickSim() {
       break;
   }
   // particles advance on sim time
-  tickPool(psSand, DT); tickPool(psSplash, DT); tickPool(psConfetti, DT);
+  tickPool(psSand, DT); tickPool(psSplash, DT); tickPool(psConfetti, DT); tickPool(psSeed, DT);
 }
 
 let pausePrev = null;
@@ -749,36 +789,36 @@ function updateVisuals(dt, now) {
       const w = smoothstep(cinT / 1.5);
       gx = lerp(CIN.gx0, CIN.ax, w); gz = lerp(CIN.gz0, CIN.az, w);
       mode = 'walk';
-    } else if (cinT < 2.4) {                             // lean + sprinkle
+    } else if (cinT < 2.7) {                             // MAKE IT RAIN
       gx = CIN.ax; gz = CIN.az;
       mode = 'sprinkle';
-      poseK = Math.min(1, Math.min(cinT - 1.5, 2.4 - cinT) / 0.35);
-    } else if (cinT < 3.1) {                             // step back
-      const w = smoothstep((cinT - 2.4) / 0.7);
+      poseK = Math.min(1, Math.min(cinT - 1.5, 2.7 - cinT) / 0.3);
+    } else if (cinT < 3.4) {                             // step back
+      const w = smoothstep((cinT - 2.7) / 0.7);
       gx = lerp(CIN.ax, CIN.bx, w); gz = lerp(CIN.az, CIN.bz, w);
       mode = 'walk';
     } else { gx = CIN.bx; gz = CIN.bz; }                 // watch the bird
     const bob = mode === 'walk' ? Math.abs(Math.sin(cinT * 9)) * 0.05 : 0;
     g.position.set(gx, groundH(gx, gz) + bob, gz);
-    g.rotation.y = Math.atan2(PIN.x - gx, PIN.z - gz);
+    g.rotation.set(0, Math.atan2(PIN.x - gx, PIN.z - gz), 0);
     golferPose(g, mode, poseK, cinT);
     // the cardinal: swoop in → peck at the seed → fly off
-    BIRD.visible = cinT >= 2.9 && cinT < 5.6;
+    BIRD.visible = cinT >= 3.2 && cinT < 5.9;
     if (BIRD.visible) {
       const ldx = Math.sin(CIN.camA), ldz = Math.cos(CIN.camA);   // land offset
       const lxp = PIN.x + ldx * 0.32, lzp = PIN.z + ldz * 0.32;
       const ly = groundH(lxp, lzp);
       let flap = 0;
-      if (cinT < 3.8) {                                  // swoop in
-        const w = smoothstep((cinT - 2.9) / 0.9);
+      if (cinT < 4.1) {                                  // swoop in
+        const w = smoothstep((cinT - 3.2) / 0.9);
         BIRD.position.set(lerp(lxp + ldx * 5, lxp, w), lerp(ly + 6, ly, w * w), lerp(lzp + ldz * 5, lzp, w));
         BIRD.rotation.x = 0;
         flap = 1;
-      } else if (cinT < 4.9) {                           // land + peck
+      } else if (cinT < 5.2) {                           // land + peck
         BIRD.position.set(lxp, ly, lzp);
-        BIRD.rotation.x = 0.55 * Math.max(0, Math.sin((cinT - 3.8) * 7.5));
+        BIRD.rotation.x = 0.55 * Math.max(0, Math.sin((cinT - 4.1) * 7.5));
       } else {                                           // fly away
-        const w = smoothstep((cinT - 4.9) / 0.7);
+        const w = smoothstep((cinT - 5.2) / 0.7);
         BIRD.position.set(lxp - ldx * 4 * w, ly + 5 * w * w, lzp - ldz * 4 * w);
         BIRD.rotation.x = -0.2 * w;
         flap = 1;
@@ -798,7 +838,9 @@ function updateVisuals(dt, now) {
     const lx = -Math.cos(SHOT.aimAng), lz = Math.sin(SHOT.aimAng);
     const gx = p.ball.x + lx * 0.85, gz = p.ball.z + lz * 0.85;
     g.position.set(gx, groundH(gx, gz), gz);
-    g.rotation.y = Math.atan2(p.ball.x - gx, p.ball.z - gz);
+    // FC-8: he stands on the slope, not on an idea of flat ground
+    golferTiltDeg = standOn(g, gx, gz, Math.atan2(p.ball.x - gx, p.ball.z - gz));
+    golferUp[0] = _tN.x; golferUp[1] = _tN.y; golferUp[2] = _tN.z;
     // FC-5: putts use the short pendulum stroke states, never the full swing
     if (state === 'meter') golferPose(g, SHOT.putter ? 'pback' : 'back', SHOT.meterV / 100, visT);
     else if (state === 'swing') golferPose(g, SHOT.putter ? 'pthru' : 'thru', smoothstep(swingT / 0.25), visT, swingPower);
@@ -812,8 +854,10 @@ function updateVisuals(dt, now) {
     // screen-left of the golfer (clear of the minimap panel), a step back
     const bx = p.ball.x - lx * 3.4 - aimDirX() * 2.0, bz = p.ball.z - lz * 3.4 - aimDirZ() * 2.0;
     cad.position.set(bx, groundH(bx, bz), bz);
-    cad.rotation.y = Math.atan2(p.ball.x - bx, p.ball.z - bz) + 0.35 + Math.sin(visT * 0.55) * 0.05;
-    cad.rotation.z = Math.sin(visT * 0.8) * 0.016;
+    // FC-8: the caddie stands on his own patch of slope, idle sway on top
+    standOn(cad, bx, bz, Math.atan2(p.ball.x - bx, p.ball.z - bz) + 0.35 + Math.sin(visT * 0.55) * 0.05);
+    _tq2.setFromAxisAngle(_tZ, Math.sin(visT * 0.8) * 0.016);
+    cad.quaternion.multiply(_tq2);
     // painted blob only when the real 1024 shadow isn't anchoring him
     SHADOW_GOLFER.visible = !(LOOK && FX.shadow);
     SHADOW_GOLFER.position.set(gx, groundH(gx, gz) + 0.05, gz);
@@ -829,6 +873,9 @@ function updateVisuals(dt, now) {
     const s2 = 1 + Math.sin(visT * 4) * 0.12;
     ringMesh.scale.set(s2, s2, s2);
   }
+  // FC-8: the rollout tail rides with the arc whenever there is a run to show
+  rollPts.visible = ringMesh.visible && SHOT.rollLen > 1.5;
+  restRing.visible = rollPts.visible;
   if (greenArrows) greenArrows.visible = (state === 'greenread') || (SHOT.putter && DIFF === 'pro' && (state === 'address' || state === 'meter'));
   // flag flutter (the pin is pulled during the birdseed beat)
   if (flagCloth) {
@@ -940,11 +987,15 @@ function updateCamera(dt) {
     case 'flight': {
       const sp = Math.hypot(FLIGHT.vx, FLIGHT.vz) + 0.01;
       const dx = FLIGHT.vx / sp, dz = FLIGHT.vz / sp;
-      const back = FLIGHT.mode === 'roll' ? 6 : 9.5;
-      const up = FLIGHT.mode === 'roll' ? 2.4 : 4.2;
+      /* FC-8: the chase FOLLOWS THE ROLL TO REST — as the ball slows the eye
+         closes in and settles low behind it, so the release reads as travel
+         rather than as a cut to wherever it stopped. */
+      const roll = FLIGHT.mode === 'roll';
+      const back = roll ? clamp(3.6 + sp * 0.34, 3.6, 7.5) : 9.5;
+      const up = roll ? clamp(1.5 + sp * 0.11, 1.5, 2.6) : 4.2;
       const ex = FLIGHT.x - dx * back, ez = FLIGHT.z - dz * back;
       const ey = Math.max(FLIGHT.y + up, groundH(ex, ez) + 1.4);
-      camGoal(ex, ey, ez, FLIGHT.x, FLIGHT.y + 0.5, FLIGHT.z, 4.2, dt);
+      camGoal(ex, ey, ez, FLIGHT.x, FLIGHT.y + 0.5, FLIGHT.z, roll ? 3.4 : 4.2, dt);
       setFov(50 + clamp(sp * 0.12, 0, 9));
       break;
     }
@@ -1229,6 +1280,213 @@ window.__fc = {
       dev: land ? +Math.hypot(land[0] - prev[0], land[1] - prev[1]).toFixed(2) : -1,
       bias: +bias.toFixed(4), cross: +cross.toFixed(4) };
   },
+
+  /* ══════════════ FC-8 hooks — the "feels like land" witnesses ══════════════ */
+  // the per-hole meso layer as BUILT (character, capped relief, gradients)
+  undInfo: () => (FIELD && FIELD.und ? { hole: CUR.n, kind: FIELD.und.kind, wl: FIELD.und.wl,
+    relief: FIELD.und.relief, gTyp: FIELD.und.gTyp, gMax: FIELD.und.gMax } : null),
+  // the collection hollows / sheds in the environs, in world space
+  hollows: () => (FIELD && FIELD.hol ? FIELD.hol.map(h => ({ d: h.d, off: h.off, r: h.r, a: h.a,
+    x: +h.x.toFixed(2), z: +h.z.toFixed(2) })) : []),
+  /* UNDULATION SWEEP — does the corridor actually ROLL?  Walks the play line
+     and both shoulders between the elevation stations and takes the mean
+     |second difference| of the ground: an FC-7 macro ramp curves ~0 between
+     its stations, meso land does not.  Measured with the layer ON and OFF
+     through the very same field, so the comparison is exact. */
+  undSweep: () => {
+    const sg = GREEN, sw = WATERS.length;
+    const out = [];
+    for (let i = 0; i < 18; i++) {
+      const H = HOLES[i];
+      const f = makeHoleField(H, i);
+      /* sample the SAME stations twice through the SAME field — once with
+         the meso layer live, once with it switched off (that second pass is
+         literally the FC-7 ground).  `dev` is the RMS of the difference:
+         how many yards of real land FC-8 put into the corridor.  `cur` is
+         the mean |second difference| along the line — an FC-7 macro ramp
+         barely curves between its elevation stations; rolling land does. */
+      const A1 = [], A0 = [];
+      const walk = store => {
+        for (const off of [-8, 0, 8])
+          for (let d = H.len * 0.2; d <= H.len * 0.86; d += 3) {
+            const w = clWorld(H, d, off);
+            store.push(f(w[0], w[1])[0]);
+          }
+      };
+      UND_ON = true; HOL_ON = true; walk(A1);
+      UND_ON = false; HOL_ON = false; walk(A0);
+      UND_ON = true; HOL_ON = true;
+      let sq = 0, peak = 0;
+      for (let k = 0; k < A1.length; k++) {
+        const dv = A1[k] - A0[k];
+        sq += dv * dv;
+        if (Math.abs(dv) > peak) peak = Math.abs(dv);
+      }
+      const curOf = A => {
+        let acc = 0, n = 0;
+        for (let k = 2; k < A.length; k++) { acc += Math.abs(A[k] - 2 * A[k - 1] + A[k - 2]); n++; }
+        return n ? acc / n : 0;
+      };
+      const c1 = curOf(A1), c0 = curOf(A0);
+      out.push({ hole: H.n, kind: f.und.kind, wl: f.und.wl, relief: f.und.relief,
+        gTyp: f.und.gTyp, gMax: f.und.gMax, hol: (H.hol || []).length,
+        dev: +Math.sqrt(sq / (A1.length || 1)).toFixed(3), peak: +peak.toFixed(2),
+        cur: +c1.toFixed(4), curFlat: +c0.toFixed(4),
+        ratio: +(c1 / (c0 || 1e-6)).toFixed(2) });
+    }
+    GREEN = sg; WATERS.length = sw;
+    return out;
+  },
+  // aim nudge for the witnesses — the REAL aim variable, not a shadow of it
+  aimBy: r => { SHOT.aimAng += r; SHOT.arcDirty = true; return +SHOT.aimAng.toFixed(5); },
+  /* the collection-hollow A/B: rebuild the live hole with the hollows in or
+     out, so "the swale gathered it" is a comparison, not an anecdote */
+  setHol: on => {
+    HOL_ON = !!on;
+    buildHole(ROUND.holes.length ? ROUND.holes[ROUND.idx] : 11);
+    return HOL_ON;
+  },
+  /* DRIVE PROBE — fire a club from the live lie through the REAL pipeline and
+     report where it pitched, what the ground was doing there, and where it
+     finally stopped.  This is the rollout number in one call. */
+  driveProbe: (ci, power) => {
+    const p = activeP();
+    const sd = DIFF; DIFF = 'amateur';
+    const sc = SHOT.club, sp = SHOT.putter, sa = SHOT.arcDirty;
+    if (ci !== undefined && ci !== null) { SHOT.club = ci; SHOT.putter = false; }
+    const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+      vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+      pathN: FLIGHT.pathN, touches: FLIGHT.touches, runK: FLIGHT.runK };
+    const bx = p.ball.x, bz = p.ball.z;
+    QUIET++;
+    launchShot(p, power === undefined ? 1 : power);
+    let n = 0, ev = null;
+    while (FLIGHT.on && n++ < 4000) {
+      const r = tickBall();
+      if (r && (r.ev === 'stopped' || r.ev === 'holed' || r.ev === 'water')) { ev = r.ev; break; }
+    }
+    const tx = FLIGHT.touchX, tz = FLIGHT.touchZ;
+    const rx = FLIGHT.x, rz = FLIGHT.z;
+    QUIET--;
+    const carry = Math.hypot(tx - bx, tz - bz);
+    const total = Math.hypot(rx - bx, rz - bz);
+    // clDoff hands back ONE shared scratch array — read it out before reusing
+    const dl = clDoff(CUR, tx, tz), landD = dl[0], landOff = dl[1];
+    const de = clDoff(CUR, rx, rz), restD = de[0], restOff = de[1];
+    /* CURL: the sideways deflection of the run, measured in the ball's OWN
+       travel frame at the pitch mark (+ = right of travel).  Centreline
+       `off` cannot answer this on a dogleg — a ball running dead straight
+       past a left bend gains +off without curling an inch. */
+    const curl = (rx - tx) * FLIGHT.touchVZ - (rz - tz) * FLIGHT.touchVX;
+    const out = { club: CLUBS[SHOT.club].n, ev, curl: +curl.toFixed(2),
+      carry: +carry.toFixed(1), total: +total.toFixed(1),
+      roll: +Math.hypot(rx - tx, rz - tz).toFixed(1), gain: +(total - carry).toFixed(1),
+      slope: +FLIGHT.touchG.toFixed(4), landSurf: FLIGHT.touchSurf, restSurf: surfAt(rx, rz),
+      landD: +landD.toFixed(1), restD: +restD.toFixed(1),
+      landOff: +landOff.toFixed(2), restOff: +restOff.toFixed(2),
+      land: [+tx.toFixed(2), +tz.toFixed(2)], rest: [+rx.toFixed(2), +rz.toFixed(2)] };
+    FLIGHT.on = false;
+    for (const k in sv) FLIGHT[k] = sv[k];
+    DIFF = sd; SHOT.club = sc; SHOT.putter = sp; SHOT.arcDirty = true; MAPS.dirty = true;
+    void sa;
+    return out;
+  },
+  /* the FLAT reference every rollout claim is measured against: the same
+     clubs, the same roll model, on genuinely flat fairway */
+  flatRollTable: () => {
+    const sd = DIFF; DIFF = 'amateur';
+    const wAx = WIND.ax, wAz = WIND.az; WIND.ax = 0; WIND.az = 0;
+    const savedGround = groundH, savedSurf = surfAt;
+    const savedTrees = TREES.slice(); TREES.length = 0;
+    const sa = SHOT.aimAng, sc = SHOT.club, sp = SHOT.putter;
+    const sPin = { x: PIN.x, y: PIN.y, z: PIN.z };
+    groundH = () => 0; surfAt = () => 1;
+    PIN.x = 1e6; PIN.z = 1e6; PIN.y = 0;
+    SHOT.aimAng = 0;
+    const tmp = { ball: { x: 0, y: 0, z: 0 }, lie: 1 };
+    const out = [];
+    QUIET++;
+    for (let ci = 0; ci < CLUBS.length; ci++) {
+      SHOT.club = ci; SHOT.putter = false;
+      launchShot(tmp, 1);
+      let n = 0;
+      while (FLIGHT.on && n++ < 4000) {
+        const r = tickBall();
+        if (r && (r.ev === 'stopped' || r.ev === 'holed' || r.ev === 'water')) break;
+      }
+      const carry = Math.hypot(FLIGHT.touchX, FLIGHT.touchZ);
+      const rest = Math.hypot(FLIGHT.x, FLIGHT.z);
+      out.push({ club: CLUBS[ci].n, table: CLUBS[ci].carry, carry: +carry.toFixed(1),
+        rest: +rest.toFixed(1), roll: +(rest - carry).toFixed(1) });
+      FLIGHT.on = false;
+    }
+    QUIET--;
+    FLIGHT.pathN = 0;
+    groundH = savedGround; surfAt = savedSurf;
+    for (const t of savedTrees) TREES.push(t);
+    PIN.x = sPin.x; PIN.y = sPin.y; PIN.z = sPin.z;
+    DIFF = sd; WIND.ax = wAx; WIND.az = wAz;
+    SHOT.aimAng = sa; SHOT.club = sc; SHOT.putter = sp;
+    SHOT.arcDirty = true; MAPS.dirty = true;
+    return out;
+  },
+  /* ARC = TRUTH, NOW INCLUDING THE RELEASE: the preview's predicted rest
+     against where the struck ball actually finishes. */
+  rolloutCheck: (ci, power) => {
+    const p = activeP();
+    const sd = DIFF; DIFF = 'amateur';
+    const sc = SHOT.club, sp = SHOT.putter;
+    if (ci !== undefined && ci !== null) { SHOT.club = ci; SHOT.putter = false; }
+    const nm = CLUBS[SHOT.club].n;
+    simulateArc(p);
+    const prev = [SHOT.restX, SHOT.restZ], land = [SHOT.landX, SHOT.landZ];
+    const rollPred = SHOT.rollLen;
+    const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+      vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+      pathN: FLIGHT.pathN, touches: FLIGHT.touches, runK: FLIGHT.runK };
+    QUIET++;
+    launchShot(p, power === undefined ? 1 : power);
+    let n = 0;
+    while (FLIGHT.on && n++ < 4000) {
+      const r = tickBall();
+      if (r && (r.ev === 'stopped' || r.ev === 'holed' || r.ev === 'water')) break;
+    }
+    const rest = [FLIGHT.x, FLIGHT.z];
+    const rollReal = Math.hypot(FLIGHT.x - FLIGHT.touchX, FLIGHT.z - FLIGHT.touchZ);
+    QUIET--;
+    FLIGHT.on = false;
+    for (const k in sv) FLIGHT[k] = sv[k];
+    DIFF = sd; SHOT.club = sc; SHOT.putter = sp;
+    SHOT.arcDirty = true; MAPS.dirty = true;
+    return { club: nm,
+      land: [+land[0].toFixed(2), +land[1].toFixed(2)],
+      prev: [+prev[0].toFixed(2), +prev[1].toFixed(2)],
+      rest: [+rest[0].toFixed(2), +rest[1].toFixed(2)],
+      err: +Math.hypot(rest[0] - prev[0], rest[1] - prev[1]).toFixed(2),
+      rollPred: +rollPred.toFixed(1), rollReal: +rollReal.toFixed(1) };
+  },
+  // the stance tilt the player can see, and the cant that produced it
+  golferTilt: () => {
+    const p = activeP();
+    return { deg: +golferTiltDeg.toFixed(2),
+      up: golferUp.map(v => +v.toFixed(4)),
+      lat: +(golferUp[0] * Math.cos(SHOT.aimAng) - golferUp[2] * Math.sin(SHOT.aimAng)).toFixed(4),
+      cross: +lieCross(p).toFixed(4) };
+  },
+  /* PIN SANITY, all 18: every cup — hand-set or scored — must sit ≥3 yds
+     inside the green edge, ≥3 yds off any bunker lip, and on ground gentle
+     enough to putt around. */
+  pinAudit: () => {
+    const cur = ROUND.holes.length ? ROUND.holes[ROUND.idx] : 11;
+    const out = [];
+    for (let i = 0; i < 18; i++) {
+      buildHole(i);
+      out.push(Object.assign({}, PINFO));
+    }
+    buildHole(cur);
+    return out;
+  },
+  pinInfo: () => (PINFO ? Object.assign({}, PINFO) : null),
 
   /* club range sweep — THE carry-table integrity witness.  Drives the REAL
      launchShot + tickBall pipeline for every club at 100% power on flat

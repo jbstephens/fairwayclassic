@@ -717,7 +717,7 @@ async function partH() {
     await page.nav(`http://localhost:${HTTP}/`);
     await page.connectPad(0);
     await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
-    ok((await page.eval('__fc.build')) === 'FC-7-SAUCE', 'build tag is FC-7-SAUCE');
+    ok((await page.eval('__fc.build')) === 'FC-8-RAIN', 'build tag is FC-8-RAIN');
     await sleep(400);
     for (const want of ['diffpick', 'roundpick', 'flyover']) {
       for (let i = 0; i < 6; i++) {
@@ -950,7 +950,237 @@ async function partH() {
 }
 const sp2 = r => `${r.sp} yd/s`;
 
-/* `node --experimental-websocket test/harness.mjs [A|B|…|H]` runs one part
+/* ════════ PART I — FC-8: fairways that feel like land ════════
+   The meso layer in the corridor (and the gradient laws that keep it from
+   out-tilting the hole), drives that ride the land, approach irons that
+   still check up, the rollout tail as truth, the environs' collection
+   hollows, the stance on a canted lie, and pin sanity on all 18. */
+async function partI() {
+  console.log('\n═══ PART I: FC-8 fairways that feel like land ═══');
+  const page = await openPage(CDP);
+  const J = e => `JSON.parse(JSON.stringify(${e}))`;
+  try {
+    await page.nav(`http://localhost:${HTTP}/`);
+    await page.connectPad(0);
+    await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
+    await sleep(400);
+    for (const want of ['diffpick', 'roundpick', 'flyover']) {
+      for (let i = 0; i < 6; i++) {
+        await page.pressPad('south'); await sleep(350);
+        if ((await page.eval('__fc.state()')) === want) break;
+      }
+    }
+    await waitState(page, 'flyover', 'flyover', 15000);
+    await sleep(1300);
+    await page.pressPad('south');
+    await waitState(page, 'address', 'address', 10000);
+    await page.eval('__fc.setWind(0,0)');
+    const goHole = async n => {
+      await page.eval(`__fc.gotoHole(${n})`);
+      await page.waitFor(`__fc.state()==='flyover' && __fc.hole()===${n}`, 'hole ' + n, 20000);
+      await sleep(1200);
+      await page.pressPad('south');
+      await waitState(page, 'address', 'address ' + n, 10000);
+      await page.eval('__fc.setWind(0,0)');
+      await sleep(150);
+    };
+
+    /* ── 1. THE MESO LAYER IS REALLY THERE ──
+       Measured through the one analytic field, sampled twice at the same
+       stations: once live, once with the layer switched off (which IS the
+       FC-7 ground).  dev = RMS yards of land added; cur = mean |second
+       difference| along the corridor, which a smooth macro ramp cannot
+       fake. */
+    const UND = await page.eval(J('__fc.undSweep()'));
+    globalThis.__fc8und = UND;
+    console.log('  per-hole meso layer:\n' + UND.map(u =>
+      `    ${String(u.hole).padStart(2)} ${u.kind.padEnd(6)} wl ${String(u.wl).padStart(2)}y` +
+      `  relief ${String(u.relief).padStart(5)}  dev ${String(u.dev).padStart(5)}  peak ${String(u.peak).padStart(4)}` +
+      `  curve ${String(u.cur).padStart(6)} vs flat ${String(u.curFlat).padStart(6)} (x${u.ratio})` +
+      `  gTyp ${u.gTyp}  gMax ${u.gMax}  hollows ${u.hol}`).join('\n'));
+    const rolling = UND.filter(u => u.dev >= 0.25 && u.cur > u.curFlat);
+    ok(rolling.length >= 12,
+      `${rolling.length} holes carry real meso relief (>= 0.25 yd RMS AND more corridor curvature than the FC-7 flat line) — need 12`);
+    ok(UND.filter(u => u.cur > u.curFlat).length >= 17,
+      `${UND.filter(u => u.cur > u.curFlat).length}/18 holes curve more between the elevation stations than FC-7 did`);
+    // the two constants the field builder caps against (UND_GRAD_TYP/_MAX)
+    ok(UND.every(u => u.gTyp <= 0.1551), 'THE GRADIENT LAW: no hole\'s typical meso gradient exceeds 0.155');
+    ok(UND.every(u => u.gMax <= 0.2801),
+      `THE GRADIENT LAW: no hole's worst-case meso gradient exceeds 0.28 — under what fairway turf holds (restGrad 0.34); worst ${Math.max(...UND.map(u => u.gMax))}`);
+    ok(UND.filter(u => u.kind === 'ripple').length === 1 && UND[6].kind === 'ripple',
+      '7 Pampas is the tight ripple');
+    ok(UND[1].kind === 'bench' && UND[7].kind === 'bench', '2 and 8 climb in stepped benches');
+    ok([10, 11, 13].every(n => UND[n - 1].kind === 'swoop'),
+      '10, 11 and 13 carry long swooping waves under their cants');
+
+    /* ── 2. DRIVES RIDE THE LAND: 10 releases downhill ── */
+    await goHole(10);
+    const sw10 = await page.eval(J(`[1,0.98,0.96,0.94,0.92,0.9,0.88].map(p => __fc.driveProbe(0,p))`));
+    globalThis.__fc8roll10 = sw10;
+    console.log('  hole 10 driver sweep (carry / roll / slope at the pitch mark):\n' + sw10.map(d =>
+      `    carry ${String(d.carry).padStart(5)}  roll ${String(d.roll).padStart(5)}  slope ${String(d.slope).padStart(8)}  surf ${d.landSurf}`).join('\n'));
+    const down10 = sw10.filter(d => d.landSurf === 1 && d.slope < -0.02);
+    ok(down10.length > 0, `10: the driver finds falling ground to pitch on (${down10.length} of ${sw10.length} landings)`);
+    const best10 = down10.reduce((a, b) => (b.roll > a.roll ? b : a), down10[0] || { roll: -1 });
+    ok(best10.roll >= 18,
+      `10 CAMELLIA: a drive landing on the downslope RELEASES ${best10.roll} yds (>= 18; flat-ground driver rollout is ~17)`);
+
+    /* ── 3. …and 18's climb kills it ── */
+    await goHole(18);
+    const sw18 = await page.eval(J(`[1,0.98,0.96,0.94,0.92,0.9].map(p => __fc.driveProbe(0,p))`));
+    globalThis.__fc8roll18 = sw18;
+    console.log('  hole 18 driver sweep:\n' + sw18.map(d =>
+      `    carry ${String(d.carry).padStart(5)}  roll ${String(d.roll).padStart(5)}  slope ${String(d.slope).padStart(8)}  surf ${d.landSurf}`).join('\n'));
+    const up18 = sw18.filter(d => d.landSurf === 1 && d.slope >= 0.10);
+    ok(up18.length > 0, `18: the driver pitches into the hill (${up18.length} landings on real upslope)`);
+    const worstUp = Math.max(...up18.map(d => d.roll));
+    ok(worstUp <= 6,
+      `18 HOLLY: pitching into the climb kills the run — worst rollout ${worstUp} yds (<= 6)`);
+
+    /* ── 4. THE SIDEHILL KICK on 13 (and its mirror on 8) ──
+       Measured in the ball's own travel frame at the pitch mark: on a
+       dogleg, centreline `off` gains yards without the ball curling an
+       inch, so it cannot answer this question. */
+    await goHole(13);
+    const s13 = await page.eval(J(`(() => { const o = [];
+      for (const ci of [0,1,2,3]) for (const p of [1,0.95,0.9]) {
+        __fc.teleport(...__fc.clWorld(4, 0));
+        const d = __fc.driveProbe(ci, p);
+        o.push({ club: d.club, p, curl: d.curl, roll: d.roll, surf: d.landSurf });
+      } return o; })()`));
+    const real13 = s13.filter(d => d.surf === 1 && d.roll >= 6);
+    console.log('  hole 13 sidehill curl (+ = right of travel):',
+      JSON.stringify(real13.map(d => ({ c: d.club, roll: d.roll, curl: d.curl }))));
+    ok(real13.length >= 6, `13: ${real13.length} drives get a real release on the cant`);
+    ok(real13.every(d => d.curl < 0),
+      `13 AZALEA: every one kicks and curls to the LOW side, toward the creek (worst ${Math.max(...real13.map(d => d.curl))} yds)`);
+    ok(Math.min(...real13.map(d => d.curl)) <= -1.5,
+      `13: and the big releases curl ${Math.min(...real13.map(d => d.curl))} yds — a kick you can see`);
+    await goHole(8);
+    const s8 = await page.eval(J(`(() => { const o = [];
+      for (const ci of [0,1,2]) for (const p of [1,0.95,0.9]) {
+        __fc.teleport(...__fc.clWorld(4, 0));
+        const d = __fc.driveProbe(ci, p);
+        o.push({ curl: d.curl, roll: d.roll, surf: d.landSurf });
+      } return o; })()`));
+    const real8 = s8.filter(d => d.surf === 1 && d.roll >= 6);
+    ok(real8.length && real8.every(d => d.curl > 0),
+      `8 (canted the other way) kicks the other way — the kick reads the ground, not the hole (${real8.length} drives)`);
+
+    /* ── 5. …and the SCORING SHOT still checks up ── */
+    const appr = [];
+    for (const n of [17, 3, 7, 14]) {
+      await goHole(n);
+      appr.push(await page.eval(J(
+        `(() => { __fc.teleport(...__fc.clWorld(__fc.holeLen() - 150, 0)); return __fc.driveProbe(7, 1); })()`)));
+    }
+    console.log('  8-iron approaches from 150:', JSON.stringify(appr.map(a =>
+      ({ carry: a.carry, roll: a.roll, land: a.landSurf, rest: a.restSurf }))));
+    ok(appr.every(a => a.landSurf === 2 && a.restSurf === 2),
+      'the 8-iron approach still holds the green it lands on (4 holes)');
+    ok(appr.every(a => a.roll <= 8),
+      `and still checks up — worst rollout ${Math.max(...appr.map(a => a.roll))} yds (<= 8, FC-7 typical)`);
+
+    /* ── 6. ARC = TRUTH INCLUDING THE RELEASE ── */
+    const tails = [];
+    for (const n of [1, 10, 13]) {
+      await goHole(n);
+      tails.push({ hole: n, r: await page.eval(J(`__fc.rolloutCheck(0, 1)`)) });
+    }
+    console.log('  rollout-tail prediction:', JSON.stringify(tails));
+    for (const t of tails)
+      ok(t.r.err <= 6,
+        `hole ${t.hole}: the predicted-rollout tail ends ${t.r.err} yds from where the struck ball rests (<= 6; predicted ${t.r.rollPred} vs real ${t.r.rollReal})`);
+
+    /* ── 7. THE ENVIRONS GATHER: hole 5's swale, in and out ──
+       The same pulled drive, twice, with the collection hollows switched
+       off and on: the swale has to pull the rest toward its own centre. */
+    await goHole(5);
+    const hol5 = await page.eval(J('__fc.hollows()'));
+    console.log('  hole 5 hollows:', JSON.stringify(hol5));
+    ok(hol5.length >= 2 && hol5.some(h => h.a < 0), '5 Magnolia carries collection hollows in its shoulders');
+    const ab = await page.eval(J(`(() => { const o = [];
+      for (const on of [false, true]) {
+        __fc.setHol(on);
+        const h = __fc.hollows()[0];
+        for (const a of [-0.05,-0.06,-0.07,-0.08,-0.09,-0.10,-0.11]) {
+          __fc.teleport(...__fc.clWorld(4, 0));
+          __fc.aimBy(a);
+          const d = __fc.driveProbe(0, 1);
+          o.push({ on, aim: a, restOff: d.restOff,
+            dRest: +Math.hypot(d.rest[0]-h.x, d.rest[1]-h.z).toFixed(2) });
+        }
+      }
+      __fc.setHol(true); return o; })()`));
+    const offA = ab.filter(d => !d.on), onA = ab.filter(d => d.on);
+    const gains = offA.map((d, i) => +(d.dRest - onA[i].dRest).toFixed(2));
+    console.log('  hole 5 pulled-drive A/B, yds closer to the swale line with it in:', JSON.stringify(gains));
+    ok(gains.filter(g => g > 0).length >= 6,
+      `5: the swale pulls a pulled drive toward its line on ${gains.filter(g => g > 0).length}/7 aims`);
+    ok(Math.max(...gains) >= 1.0,
+      `5: and gathers it up to ${Math.max(...gains)} yds closer than the same drive on FC-7 ground`);
+    ok(onA.every((d, i) => Math.abs(d.restOff - offA[i].restOff) < 12),
+      '5: the hollow gathers the miss — it does not teleport it (sanity)');
+
+    /* ── 8. THE GOLFER FEELS THE LIE ── */
+    await goHole(13);
+    await page.eval('__fc.teleport(...__fc.clWorld(300, 10))');
+    await sleep(500);
+    const tilt = await page.eval(J('__fc.golferTilt()'));
+    console.log('  hole 13 stance on the cant:', JSON.stringify(tilt));
+    ok(tilt.deg > 1.5, `13: the golfer visibly tilts with the ground (${tilt.deg} deg)`);
+    ok(tilt.deg <= 7.05, `13: …and the tilt stays capped, never comic (${tilt.deg} deg <= 7)`);
+    ok(Math.abs(tilt.cross) > 0.03, `13: there is a real cant under him (cross ${tilt.cross})`);
+    ok((tilt.cross > 0 && tilt.lat < 0) || (tilt.cross < 0 && tilt.lat > 0),
+      `13: he leans with the slope, not against it — ground rising to his ${tilt.cross > 0 ? 'right' : 'left'} tips his stance ${tilt.lat < 0 ? 'left' : 'right'} (lat ${tilt.lat})`);
+    const flatTilt = await page.eval(J(
+      `(() => { __fc.teleport(...__fc.clWorld(4, 0)); return __fc.golferTilt(); })()`));
+    await sleep(350);
+    const flatTilt2 = await page.eval(J('__fc.golferTilt()'));
+    ok(flatTilt2.deg < tilt.deg,
+      `and stands straighter on the built tee pad (${flatTilt2.deg} deg vs ${tilt.deg} on the cant)`);
+    void flatTilt;
+
+    /* ── 9. PIN SANITY, all 18 (the FC-8 scope addition) ──
+       Every cup — hand-set or scored — ≥3 yds inside the green edge, ≥3
+       yds off any bunker lip, on ground gentle enough to putt around. */
+    const PA = await page.eval(J('__fc.pinAudit()'));
+    globalThis.__fc8pins = PA;
+    console.log('  pin audit:\n' + PA.map(p =>
+      `    ${String(p.hole).padStart(2)}  lat ${String(p.lat).padStart(6)} along ${String(p.along).padStart(6)}` +
+      `  ${p.handSet ? 'hand-set' : 'scored  '}  moved ${String(p.moved).padStart(5)}` +
+      `  edge ${String(p.edge).padStart(5)}  sand ${String(p.sand).padStart(6)}  ring ${String(p.ring).padStart(6)}`).join('\n'));
+    ok(PA.every(p => p.edge >= 3), `every pin sits >= 3 yds inside its green edge (worst ${Math.min(...PA.map(p => p.edge))})`);
+    ok(PA.every(p => p.sand >= 3), `every pin sits >= 3 yds off the nearest bunker lip (worst ${Math.min(...PA.map(p => p.sand))})`);
+    ok(PA.every(p => p.ring <= 0.135),
+      `every cup has puttable ground around it — worst 2.2-yd ring gradient ${Math.max(...PA.map(p => p.ring))} (<= 0.135, green restGrad is 0.15)`);
+    ok(PA.every(p => p.relax === 0), 'and every one of them is legal under the STRICT law — no hole needed a relaxation');
+    const p16 = PA[15];
+    ok(p16.lat < -3 && p16.along < 0,
+      `16 REDBUD: the Sunday pin now sits in the low-left GATHER the feeder feeds toward (lat ${p16.lat}, along ${p16.along})`);
+    ok(p16.sand >= 3,
+      `16: …and off the left bunker's shoulder it used to sit on (${p16.sand} yds of clearance, was ~1)`);
+
+    /* ── 10. the flat reference the rollout claims are measured against ── */
+    const FR = await page.eval(J('__fc.flatRollTable()'));
+    globalThis.__fc8flat = FR;
+    console.log('  flat-ground rollout by club:\n' + FR.map(r =>
+      `    ${r.club.padEnd(3)} table ${String(r.table).padStart(3)}  carry ${String(r.carry).padStart(5)}  rest ${String(r.rest).padStart(5)}  roll ${r.roll}`).join('\n'));
+    ok(FR.every(r => Math.abs(r.carry - r.table) <= 5),
+      'FLAT-CARRY TABLE INTEGRITY: the meso layer never touches flat ground — every carry still lands on its table number');
+    const dr = FR[0], pw = FR[9];
+    ok(dr.roll > pw.roll * 2.5,
+      `the driver runs (${dr.roll} yds) and the wedge sits down (${pw.roll} yds) on the same flat turf`);
+    for (let i = 1; i < FR.length; i++)
+      if (i <= 9) ok(FR[i].roll <= FR[i - 1].roll + 0.6,
+        `${FR[i].club} rolls no further than ${FR[i - 1].club} (${FR[i].roll} <= ${FR[i - 1].roll})`);
+
+    ok(page.errors.length === 0, 'ZERO console errors across part I' +
+      (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
+  } finally { await page.close(); }
+}
+
+/* `node --experimental-websocket test/harness.mjs [A|B|…|I]` runs one part
    while iterating; no argument runs the whole standard (the default). */
 const ONLY = (process.argv[2] || '').toUpperCase();
 const run = (letter, fn) => (!ONLY || ONLY === letter ? fn() : Promise.resolve());
@@ -963,6 +1193,7 @@ try {
   await run('F', partF);
   await run('G', partG);
   await run('H', partH);
+  await run('I', partI);
 } catch (e) {
   console.error('\nHARNESS THREW:', e.message);
   process.exitCode = 1;
@@ -984,6 +1215,31 @@ if (globalThis.__fc7roll) {
   const w = globalThis.__fc7roll.reduce((a, b) => (b.worst > a.worst ? b : a));
   console.log(`\nFC-7 roll termination: worst ${w.worst}s (hole ${w.hole}, ${w.where}); hard-floor hits ` +
     globalThis.__fc7roll.reduce((a, b) => a + b.capped, 0));
+}
+if (globalThis.__fc8und) {
+  console.log('\nFC-8 meso layer per hole (relief = peak-to-trough yds, dev = RMS yds added vs FC-7):');
+  console.log('  ##  kind    wl  relief    dev   peak    gTyp    gMax  hollows');
+  for (const u of globalThis.__fc8und) {
+    console.log(`  ${String(u.hole).padStart(2)}  ${u.kind.padEnd(6)}  ${String(u.wl).padStart(2)}` +
+      `  ${String(u.relief).padStart(5)}  ${String(u.dev).padStart(5)}  ${String(u.peak).padStart(5)}` +
+      `  ${String(u.gTyp).padStart(6)}  ${String(u.gMax).padStart(6)}  ${String(u.hol).padStart(5)}`);
+  }
+}
+if (globalThis.__fc8flat) {
+  const f = globalThis.__fc8flat;
+  console.log('\nFC-8 rollout, flat ground: ' + f.map(r => `${r.club} ${r.roll}`).join(' · '));
+}
+if (globalThis.__fc8roll10 && globalThis.__fc8roll18) {
+  const d = globalThis.__fc8roll10.filter(r => r.slope < -0.02);
+  const u = globalThis.__fc8roll18.filter(r => r.slope >= 0.10);
+  console.log(`FC-8 driver rollout: 10 downslope ${Math.max(...d.map(r => r.roll))} yds · ` +
+    `18 into the climb ${Math.max(...u.map(r => r.roll))} yds · flat ${globalThis.__fc8flat ? globalThis.__fc8flat[0].roll : '?'} yds`);
+}
+if (globalThis.__fc8pins) {
+  const P = globalThis.__fc8pins;
+  console.log(`FC-8 pin sanity: worst edge ${Math.min(...P.map(p => p.edge))} yd · ` +
+    `worst sand ${Math.min(...P.map(p => p.sand))} yd · worst ring grad ${Math.max(...P.map(p => p.ring))} · ` +
+    `moved: ${P.filter(p => p.moved > 0.01).map(p => `#${p.hole} ${p.moved}yd`).join(', ') || 'none'}`);
 }
 if (globalThis.__sweep) {
   console.log('\n18-hole build sweep (ms):');
