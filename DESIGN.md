@@ -343,3 +343,47 @@ implement as written. Build + verify with OPUS agents (John's call).
    unchanged (≤80 true calls, ≤75k target tris, casters curated, bake
    sweep under ~350 ms desktop); 60fps kiosk law; ?look=0 / ?fx=low keep
    working; every existing suite stays green, extended not replaced.
+
+# FC-8 — fairways that feel like land (locked 2026-09-21)
+
+John after playing FC-7: "the greens are much more nuanced and harder,
+which is good. But the fairways and environs seem basically the same."
+Root cause: greens got a contour FIELD + physics that expresses it every
+putt; fairways got macro elevation + cant that play rarely surfaces
+(approach shots check up fast, mid-scale land is still smooth). Decided
+— implement as written; do NOT touch the greens (they're right).
+
+1. MESO-SCALE LAND IN THE CORRIDOR: add a per-hole undulation layer to
+   fairway + rough — swales, rolls, ridgelets at ~18–45 yd wavelength,
+   amplitude ~0.8–2.2 yds (per-hole character: 5/14/17 rolling, 7 tight
+   ripple, 10/13 long swooping waves layered on the cant, 2/8 stepped
+   benches). Deterministic per hole (seeded), part of the ONE analytic
+   ground field (mesh = physics, as always). Tee pads/green complexes
+   and their surrounds keep their FC-7 shapes (blend margin).
+2. THE GROUND MUST READ WITHOUT A HUD: strengthen slope-reading in the
+   bake — aspect-based light/shade contrast on fairway (sun-facing
+   slopes brighten, cross-slopes shade), mow stripes bending with the
+   land, sharper rough/fairway edge where the land tilts. Target: a
+   screenshot of any fairway mid-corridor visibly undulates at couch
+   distance with the HUD off.
+3. DRIVES RIDE THE LAND: tune touch-down + roll so tee shots (DR/woods)
+   visibly work with the terrain — landing on a downslope releases and
+   runs (10 can gain 25+ yds of rollout), into an upslope kills, sidehill
+   landing kicks and curls low-side. Chase cam follows the roll to rest.
+   Approach irons keep checking up (don't punish the scoring shot).
+   Termination law stays.
+4. THE GOLFER FEELS THE LIE: on canted lies the golfer + stance visibly
+   tilt with the ground (lean into the hill), and the caddie stands on
+   the slope too. Small, readable, never comic.
+5. ENVIRONS ALIVE: rough shoulders get hollows/mounds that gather or
+   shed (a pulled drive on 5 gathers into a swale, not a uniform rough
+   strip); 2–3 collection hollows per hole near landing zones; bunker
+   surrounds mound up (faces read from the fairway).
+6. LAWS unchanged: greens untouched; routing untouched; one-ground-
+   authority; arc = truth (rollout preview: extend the landing ring with
+   a short predicted-rollout tail so the player sees the release);
+   flat-carry table integrity; camera comfort + flyover contract;
+   budgets (≤80 true calls, ≤75k target tris, bake ≤~350ms desktop);
+   60fps kiosk; ?look=0 / ?fx=low; all suites green, extended not
+   replaced. Pi verification after ship (the bake gets busier — measure
+   bake cost AND fps).
