@@ -177,6 +177,7 @@ async function flyover() {
     // 2.5-3 yds over the tee (lower on a hole that climbs away) — everything
     // before it flies 10-27 yds up
     gate(`camera stays clear of the ground it flies (min ${rec.minClear.toFixed(1)} yd > 2)`, rec.minClear > 2);
+    gate(`flyover altitude is smooth, not swale-tracking (kink ${(rec.maxKink || 0).toFixed(3)} < 0.02)`, (rec.maxKink || 0) < 0.02);
     const gap = Math.hypot(camAfter[0] - rec.endPos[0], camAfter[1] - rec.endPos[1], camAfter[2] - rec.endPos[2]);
     gate(`settles into the address camera (gap ${gap.toFixed(2)} yd < 0.75)`, gap < 0.75);
     gate(`flyover sampled ${rec.n} frames`, rec.n > 60);
@@ -359,6 +360,7 @@ async function cameras() {
       gate(`hole ${hn} flyover: never reverses over the relief`, rec.mono === true);
       gate(`hole ${hn} flyover: clears the terrain it shows off (min ${rec.minClear.toFixed(1)} yd > 2)`,
         rec.minClear > 2);
+      gate(`hole ${hn} flyover: smooth altitude (kink ${(rec.maxKink || 0).toFixed(3)} < 0.02)`, (rec.maxKink || 0) < 0.02);
       await sleep(400);
       const clr = await page.eval('__fc.camClear()');
       gate(`hole ${hn} address camera floats ${clr.toFixed(2)} yd above the ground (> 1.2)`, clr > 1.2);

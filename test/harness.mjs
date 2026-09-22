@@ -717,7 +717,7 @@ async function partH() {
     await page.nav(`http://localhost:${HTTP}/`);
     await page.connectPad(0);
     await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
-    ok((await page.eval('__fc.build')) === 'FC-8-RAIN', 'build tag is FC-8-RAIN');
+    ok((await page.eval('__fc.build')) === 'FC-8B-GLIDE', 'build tag is FC-8B-GLIDE');
     await sleep(400);
     for (const want of ['diffpick', 'roundpick', 'flyover']) {
       for (let i = 0; i < 6; i++) {
