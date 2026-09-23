@@ -18,8 +18,8 @@ try {
     await sleep(ms);
     await page.eval(`window.dispatchEvent(new KeyboardEvent('keyup',{key:'${k}',code:'${code}',bubbles:true}))`);
   };
-  // title -> diffpick -> roundpick -> flyover -> (skip) -> address
-  for (const want of ['diffpick', 'roundpick', 'flyover']) {
+  // title -> coursepick -> diffpick -> roundpick -> flyover -> (skip) -> address
+  for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {
     await key('Space'); await page.waitFor(`window.__fc.state() === '${want}'`, want, 8000); await sleep(300);
   }
   await sleep(1400); await key('Space');

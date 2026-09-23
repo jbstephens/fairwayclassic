@@ -27,7 +27,7 @@ try {
   await page.connectPad(0);
   await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title');
   await sleep(400);
-  for (const want of ['diffpick', 'roundpick', 'flyover']) {   // AMATEUR / FRONT 9
+  for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {   // AMATEUR / FRONT 9
     for (let i = 0; i < 6; i++) {
       await page.pressPad('south'); await sleep(350);
       if ((await page.eval('__fc.state()')) === want) break;

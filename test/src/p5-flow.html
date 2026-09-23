@@ -97,11 +97,21 @@ function showScreen(elx) {
 function refreshTitle() {
   const b = loadBest();
   const parts = [];
-  if (b.amateur !== undefined) parts.push('BEST (AMATEUR): ' + vsParStr(b.amateur));
-  if (b.pro !== undefined) parts.push('BEST (PRO): ' + vsParStr(b.pro));
+  for (const c of ['magnolia', 'poco']) {
+    const tag = c === 'magnolia' ? 'MAGNOLIA' : 'POCO';
+    if (b[c].amateur !== undefined) parts.push(tag + ' (AM): ' + vsParStr(b[c].amateur));
+    if (b[c].pro !== undefined) parts.push(tag + ' (PRO): ' + vsParStr(b[c].pro));
+  }
   titleBestEl.textContent = parts.join('   ·   ');
   titleJoinEl.textContent = PLAYERS.length > 1 ? 'P2 HAS JOINED' : 'P2 PRESS ✕ TO JOIN';
 }
+/* THE COURSE PICK — the first choice of the round, in the same flat-panel
+   menu type as every other FC menu (mopt + .sub, ↑↓ / ✕). */
+const COURSE_OPTS = [
+  ['MAGNOLIA NATIONAL', 'the classic 18'],
+  ['THE POCO OPEN', '9 holes of neighborhood bucket golf'],
+];
+let courseSel = 0;
 const DIFF_OPTS = [
   ['AMATEUR', 'gentle wind · friendly drops · guided putts'],
   ['PRO', 'strong wind · proper drops · no safety net'],
@@ -181,22 +191,22 @@ function scoreWord(strokes, par) {
 /* ── scorecard ── */
 function playedVsPar(p) {
   let v = 0;
-  for (const k in p.scores) v += p.scores[k] - HOLES[k].par;
+  for (const k in p.scores) v += p.scores[k] - CH[k].par;
   return v;
 }
 function buildCard(final) {
   const holes = ROUND.holes;
   const w = holes.length > 9 ? 'min-width:34px' : 'min-width:46px';
-  let html = '<tr><th style="' + w + '">HOLE</th>' + holes.map(h => `<th style="${w}">${HOLES[h].n}</th>`).join('') + '<th class="tot">TOT</th></tr>';
-  html += '<tr><td>PAR</td>' + holes.map(h => `<td>${HOLES[h].par}</td>`).join('') +
-    `<td class="tot">${holes.reduce((a, h) => a + HOLES[h].par, 0)}</td></tr>`;
+  let html = '<tr><th style="' + w + '">HOLE</th>' + holes.map(h => `<th style="${w}">${CH[h].n}</th>`).join('') + '<th class="tot">TOT</th></tr>';
+  html += '<tr><td>PAR</td>' + holes.map(h => `<td>${CH[h].par}</td>`).join('') +
+    `<td class="tot">${holes.reduce((a, h) => a + CH[h].par, 0)}</td></tr>`;
   for (const p of PLAYERS) {
     let tot = 0;
     html += `<tr><td class="${p.colorCls}">${p.name}</td>` + holes.map(h => {
       const s = p.scores[h];
       if (s === undefined) return '<td>—</td>';
       tot += s;
-      const d = s - HOLES[h].par;
+      const d = s - CH[h].par;
       const cls = d <= -2 ? 'eagle' : d === -1 ? 'birdie' : d > 0 ? 'over' : '';
       return `<td class="${cls}">${s}</td>`;
     }).join('') + `<td class="tot">${tot || '—'}</td></tr>`;
@@ -209,7 +219,7 @@ function buildCard(final) {
     cardVsEl.textContent = PLAYERS.map(p => `${p.name}: ${vsParStr(playedVsPar(p))}`).join('   ·   ');
   }
   if (final) {
-    cardTitleEl.textContent = 'FINAL — ' + ROUND.label + ' · ' + DIFF.toUpperCase();
+    cardTitleEl.textContent = 'FINAL — ' + COURSE_TITLE[COURSE] + ' · ' + ROUND.label + ' · ' + DIFF.toUpperCase();
     if (PLAYERS.length > 1) {
       const a = playedVsPar(PLAYERS[0]), b = playedVsPar(PLAYERS[1]);
       cardWordEl.textContent = a === b ? 'ALL SQUARE!' : (a < b ? 'P1 IS THE CHAMPION!' : 'P2 IS THE CHAMPION!');
@@ -248,7 +258,7 @@ function startHole() {
   beginTrans(() => {
     const hi = ROUND.holes[ROUND.idx];
     const ms = buildHole(hi);
-    console.log('[FC] hole', HOLES[hi].n, 'built in', ms.toFixed(1), 'ms');
+    console.log('[FC] hole', CH[hi].n, 'built in', ms.toFixed(1), 'ms');
     WIND.unset = true;
     rollWind(false);
     for (const p of PLAYERS) {
@@ -386,7 +396,9 @@ function endRound() {
   hudVisible(false);
   state = 'roundend';
   for (const p of PLAYERS) {
-    if (ROUND.holes.length === 18 && Object.keys(p.scores).length === 18) saveBest(DIFF, playedVsPar(p));
+    // a FULL round of the live course (18 at Magnolia, 9 at PoCo) counts
+    if (ROUND.holes.length === CH.length && Object.keys(p.scores).length === CH.length)
+      saveBest(DIFF, playedVsPar(p), COURSE);
   }
   SFX.fanfare();
   if (PLAYERS.length > 1 || true) burst(psConfetti, GREEN.x, GREEN.h + 6, GREEN.z, 40, 3, 2);
@@ -395,6 +407,7 @@ function toTitle() {
   beginTrans(() => {
     PLAYERS = [mkPlayer(0)];
     turn = 0;
+    setCourse('magnolia');
     buildHole(11);   // hole 12 beauty shot
     refreshTitle();
     showScreen(titleUI);
@@ -453,7 +466,7 @@ function holeOut() {
   p.scores[hi] = p.strokes;
   p.ball.x = PIN.x; p.ball.z = PIN.z; p.ball.y = PIN.y;
   MAPS.dirty = true;
-  SFX.cup();
+  if (COURSE === 'poco') SFX.bucket(); else SFX.cup();
   const word = scoreWord(p.strokes, CUR.par);
   const d = p.strokes - CUR.par;
   if (p.strokes === 1) {
@@ -548,17 +561,38 @@ function tickSim() {
       break;
     case 'title':
       if (IN.p2join && PLAYERS.length === 1) { PLAYERS.push(mkPlayer(1)); SFX.confirm(); refreshTitle(); }
-      if (IN.confirm) { SFX.confirm(); menuSel = 0; state = 'diffpick'; showMenu('CHOOSE YOUR GAME', DIFF_OPTS, 0); }
+      if (IN.confirm) { SFX.confirm(); courseSel = 0; state = 'coursepick'; showMenu('CHOOSE YOUR COURSE', COURSE_OPTS, 0); }
+      break;
+    case 'coursepick':
+      if (IN.p2join && PLAYERS.length === 1) { PLAYERS.push(mkPlayer(1)); SFX.confirm(); }
+      if (IN.up || IN.down) { SFX.menu(); courseSel = 1 - courseSel; showMenu('CHOOSE YOUR COURSE', COURSE_OPTS, courseSel); }
+      if (IN.back) { state = 'title'; showScreen(titleUI); refreshTitle(); }
+      else if (IN.confirm) {
+        SFX.confirm();
+        setCourse(courseSel === 1 ? 'poco' : 'magnolia');
+        menuSel = DIFF === 'amateur' ? 0 : 1;
+        state = 'diffpick';
+        showMenu('CHOOSE YOUR GAME', DIFF_OPTS, menuSel);
+      }
       break;
     case 'diffpick':
       if (IN.p2join && PLAYERS.length === 1) { PLAYERS.push(mkPlayer(1)); SFX.confirm(); }
       if (IN.up || IN.down) { SFX.menu(); menuSel = 1 - menuSel; showMenu('CHOOSE YOUR GAME', DIFF_OPTS, menuSel); }
-      if (IN.back) { state = 'title'; showScreen(titleUI); refreshTitle(); }
+      if (IN.back) { state = 'coursepick'; showMenu('CHOOSE YOUR COURSE', COURSE_OPTS, courseSel); }
       else if (IN.confirm) {
         SFX.confirm();
         DIFF = menuSel === 0 ? 'amateur' : 'pro';
-        menuSel = 0; state = 'roundpick';
-        showMenu('CHOOSE YOUR ROUND', ROUND_OPTS, 0);
+        menuSel = 0;
+        if (COURSE === 'poco') {
+          /* POCO is nine holes and only nine — there is no round to pick */
+          const holes = [];
+          for (let i = 0; i < CH.length; i++) holes.push(i);
+          showScreen(null);
+          startRound(DIFF, holes, 'THE OPEN 9');
+        } else {
+          state = 'roundpick';
+          showMenu('CHOOSE YOUR ROUND', ROUND_OPTS, 0);
+        }
       }
       break;
     case 'roundpick':
@@ -774,7 +808,7 @@ function updateVisuals(dt, now) {
   // balls + shadows
   for (let i = 0; i < 2; i++) {
     const pl = PLAYERS[i], m = BALLS[i];
-    if (!pl || state === 'title' || state === 'diffpick' || state === 'roundpick' || pl.holed) { m.visible = false; continue; }
+    if (!pl || state === 'title' || state === 'coursepick' || state === 'diffpick' || state === 'roundpick' || pl.holed) { m.visible = false; continue; }
     m.visible = true;
     if (i === turn && (state === 'flight' || state === 'settle' && FLIGHT.on)) {
       m.position.set(FLIGHT.x, FLIGHT.y + BALL_R, FLIGHT.z);
@@ -942,7 +976,7 @@ function updateVisuals(dt, now) {
 function updateCamera(dt) {
   const p = activeP();
   switch (state) {
-    case 'title': case 'diffpick': case 'roundpick': {
+    case 'title': case 'coursepick': case 'diffpick': case 'roundpick': {
       // slow orbit over hole 12's green
       // hole 12 beauty shot: hover past the tee, creek in the foreground,
       // flag + azalea banks behind; slow lateral drift
@@ -1165,13 +1199,106 @@ window.__fc = {
   flightOn: () => FLIGHT.on,
   diff: () => DIFF,
   round: () => ({ idx: ROUND.idx, holes: ROUND.holes.slice(), label: ROUND.label }),
+  /* the course dimension — the Pi closer and every poco witness go
+     through this: __fc.course('poco') swaps the hole set and rebuilds. */
+  course: (name) => {
+    if (name !== undefined) {
+      setCourse(name);
+      buildHole(COURSE === 'poco' ? 0 : 11);
+    }
+    return COURSE;
+  },
+  courseHoleCount: () => CH.length,
+  holeRec: (i) => {
+    const H = CH[i === undefined ? (ROUND.holes.length ? ROUND.holes[ROUND.idx] : 0) : i];
+    return { n: H.n, name: H.name, par: H.par, yds: H.yds, fw: H.fw, len: +H.len.toFixed(1),
+      water: H.water.map(w => Object.assign({}, w)), bunkers: H.bunkers.length,
+      scenery: H.scenery ? { houses: H.scenery.houses.length, trees: H.scenery.trees.length,
+        streets: H.scenery.streets.length, regions: H.scenery.regions.length,
+        bigs: H.scenery.bigs.length, tramps: H.scenery.tramps.length } : null };
+  },
+  holeInfoText: () => holeInfoEl.textContent,
+  // POCO witnesses: the sim volumes, exactly as tickBall sees them
+  houses: () => HOUSES.map(h => ({ x: +h.x.toFixed(2), z: +h.z.toFixed(2),
+    c: +h.c.toFixed(5), s: +h.s.toFixed(5), a: h.a, b: h.b, top: +h.top.toFixed(2) })),
+  tramps: () => TRAMPS.map(t => ({ x: +t.x.toFixed(2), z: +t.z.toFixed(2), r: t.r, y: +t.y.toFixed(2) })),
+  bucket: () => (BUCKET ? { x: +BUCKET.x.toFixed(3), y: +BUCKET.y.toFixed(3), z: +BUCKET.z.toFixed(3),
+    r: BUCKET.r, h: BUCKET.h } : null),
+  paveAt: (x, z) => (FIELD && FIELD.pave ? FIELD.pave.at(x, z) : 0),
+  surfName: (x, z) => SURF_NAMES[surfAt(x, z)],
+  /* is a world point inside — or standing on top of — any house box?
+     THE NEVER-RESTS-ON-A-ROOF INVARIANT is asserted through this. */
+  inHouse: (x, y, z) => {
+    for (let i = 0; i < HOUSES.length; i++) {
+      const h = HOUSES[i];
+      const dx = x - h.x, dz = z - h.z;
+      const u = dx * h.c - dz * h.s, v = dx * h.s + dz * h.c;
+      if (u > -h.a && u < h.a && v > -h.b && v < h.b && y < h.top + 0.25) return i;
+    }
+    return -1;
+  },
+  // fire a shot from the live lie at an absolute aim, through the REAL path
+  seededShot: (angle, club, power) => {
+    const p = activeP();
+    const sd = DIFF; DIFF = 'amateur';
+    const sa = SHOT.aimAng, sc = SHOT.club, sp = SHOT.putter;
+    SHOT.aimAng = angle; SHOT.club = club; SHOT.putter = false;
+    const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+      vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+      pathN: FLIGHT.pathN, touches: FLIGHT.touches, runK: FLIGHT.runK };
+    QUIET++;
+    launchShot(p, power === undefined ? 1 : power);
+    let n = 0, ev = null, houseHits = 0, roofHits = 0, trampHits = 0;
+    while (FLIGHT.on && n++ < 5000) {
+      const r = tickBall();
+      if (r && r.ev === 'house') { houseHits++; if (r.face === 'roof') roofHits++; }
+      if (r && r.ev === 'tramp') trampHits++;
+      if (r && (r.ev === 'stopped' || r.ev === 'holed' || r.ev === 'water')) { ev = r.ev; break; }
+    }
+    const out = { ev, n, houseHits, roofHits, trampHits,
+      rest: [+FLIGHT.x.toFixed(2), +FLIGHT.y.toFixed(2), +FLIGHT.z.toFixed(2)],
+      surf: surfAt(FLIGHT.x, FLIGHT.z),
+      inHouse: window.__fc.inHouse(FLIGHT.x, groundH(FLIGHT.x, FLIGHT.z) + 0.05, FLIGHT.z),
+      onRoof: window.__fc.inHouse(FLIGHT.x, FLIGHT.y, FLIGHT.z) };
+    QUIET--;
+    FLIGHT.on = false;
+    for (const k in sv) FLIGHT[k] = sv[k];
+    DIFF = sd; SHOT.aimAng = sa; SHOT.club = sc; SHOT.putter = sp;
+    SHOT.arcDirty = true; MAPS.dirty = true;
+    return out;
+  },
+  // roll a ball at the bucket at a chosen speed: capture below 6 yd/s, rim above
+  puttAtCup: (speed, fromDist) => {
+    const d = fromDist === undefined ? 3 : fromDist;
+    const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+      vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+      pathN: FLIGHT.pathN, touches: FLIGHT.touches, rims: FLIGHT.rims };
+    QUIET++;
+    FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0; FLIGHT.rollT = 0;
+    FLIGHT.rims = 0; FLIGHT.tramps = 0; FLIGHT.roofT = 0;
+    // start straight downhill-agnostic: aim the roll at the cup from -z local
+    const gx = GREEN.tx, gz = GREEN.tz;
+    FLIGHT.x = PIN.x - gx * d; FLIGHT.z = PIN.z - gz * d;
+    FLIGHT.y = groundH(FLIGHT.x, FLIGHT.z);
+    FLIGHT.vx = gx * speed; FLIGHT.vz = gz * speed; FLIGHT.vy = 0;
+    let n = 0, ev = null;
+    while (FLIGHT.on && n++ < 2400) { const r = tickBall(); if (r) { ev = r.ev; break; } }
+    const out = { ev, rims: FLIGHT.rims || 0,
+      rest: [+FLIGHT.x.toFixed(2), +FLIGHT.z.toFixed(2)],
+      dist: +Math.hypot(FLIGHT.x - PIN.x, FLIGHT.z - PIN.z).toFixed(2) };
+    QUIET--;
+    FLIGHT.on = false;
+    for (const k in sv) FLIGHT[k] = sv[k];
+    return out;
+  },
   sweepBuilds: () => {
     const out = [];
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < CH.length; i++) {
       const ms = buildHole(i);
-      out.push({ hole: i + 1, ms: +ms.toFixed(1) });
+      out.push({ hole: CH[i].n, ms: +ms.toFixed(1), calls: TL.calls,
+        tris: (window.__fcLastBuild || {}).tris | 0 });
     }
-    buildHole(11);
+    buildHole(COURSE === 'poco' ? 0 : 11);
     return out;
   },
   // ── FC-LOOK-1 hooks ──
@@ -1199,7 +1326,7 @@ window.__fc = {
   },
   shotText: () => shotInfoEl.textContent,
   // per-hole elevation record, straight from the data (no build required)
-  elevTable: () => HOLES.map(H => {
+  elevTable: () => CH.map(H => {
     let mn = 1e9, mx = -1e9;
     for (let i = 0; i <= 200; i++) {
       const e = elevAt(H, H.len * i / 200);
@@ -1257,10 +1384,10 @@ window.__fc = {
      (and how many needed the 11 s hard floor — must be zero). */
   rollSweep: () => {
     const out = [];
-    const cur = ROUND.holes.length ? ROUND.holes[ROUND.idx] : 11;
-    for (let i = 0; i < 18; i++) {
+    const cur = ROUND.holes.length ? ROUND.holes[ROUND.idx] : (COURSE === 'poco' ? 0 : 11);
+    for (let i = 0; i < CH.length; i++) {
       buildHole(i);
-      const H = HOLES[i];
+      const H = CH[i];
       let worst = 0, where = '', capped = 0;
       const test = (x, z, vx, vz, tag) => {
         const r = rollToRest(x, z, vx, vz);
@@ -1281,7 +1408,7 @@ window.__fc = {
         test(x, z, 5, 0, 'green ' + la);
         test(x, z, 0, 5, 'green ' + la + ' z');
       }
-      out.push({ hole: i + 1, worst: +worst.toFixed(2), where, capped });
+      out.push({ hole: H.n, worst: +worst.toFixed(2), where, capped });
     }
     buildHole(cur);
     return out;
@@ -1329,8 +1456,8 @@ window.__fc = {
   undSweep: () => {
     const sg = GREEN, sw = WATERS.length;
     const out = [];
-    for (let i = 0; i < 18; i++) {
-      const H = HOLES[i];
+    for (let i = 0; i < CH.length; i++) {
+      const H = CH[i];
       const f = makeHoleField(H, i);
       /* sample the SAME stations twice through the SAME field — once with
          the meso layer live, once with it switched off (that second pass is
@@ -1376,7 +1503,7 @@ window.__fc = {
      out, so "the swale gathered it" is a comparison, not an anecdote */
   setHol: on => {
     HOL_ON = !!on;
-    buildHole(ROUND.holes.length ? ROUND.holes[ROUND.idx] : 11);
+    buildHole(ROUND.holes.length ? ROUND.holes[ROUND.idx] : (COURSE === 'poco' ? 0 : 11));
     return HOL_ON;
   },
   /* DRIVE PROBE — fire a club from the live lie through the REAL pipeline and
@@ -1510,9 +1637,9 @@ window.__fc = {
      inside the green edge, ≥3 yds off any bunker lip, and on ground gentle
      enough to putt around. */
   pinAudit: () => {
-    const cur = ROUND.holes.length ? ROUND.holes[ROUND.idx] : 11;
+    const cur = ROUND.holes.length ? ROUND.holes[ROUND.idx] : (COURSE === 'poco' ? 0 : 11);
     const out = [];
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < CH.length; i++) {
       buildHole(i);
       out.push(Object.assign({}, PINFO));
     }

@@ -60,7 +60,7 @@ const GL_PROBE = `(function(){
 })();`;
 
 async function toAddress(page, viaHole) {
-  for (const want of ['diffpick', 'roundpick', 'flyover']) {
+  for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {
     for (let i = 0; i < 6; i++) {
       await page.pressPad('south'); await sleep(350);
       if ((await page.eval('__fc.state()')) === want) break;
@@ -154,7 +154,7 @@ async function flyover() {
     await page.nav(`http://localhost:${HTTP}/`);
     await page.connectPad(0);
     await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title');
-    for (const want of ['diffpick', 'roundpick', 'flyover']) {
+    for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {
       for (let i = 0; i < 6; i++) {
         await page.pressPad('south'); await sleep(350);
         if ((await page.eval('__fc.state()')) === want) break;
@@ -269,7 +269,7 @@ async function shots() {
     await sleep(900);
     await page.screenshot(path.join(SHOTS, 'title.png'));
     // flyover beats: start over the cup / mid / settled into address
-    for (const want of ['diffpick', 'roundpick', 'flyover']) {
+    for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {
       for (let i = 0; i < 6; i++) {
         await page.pressPad('south'); await sleep(350);
         if ((await page.eval('__fc.state()')) === want) break;

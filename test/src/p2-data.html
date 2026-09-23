@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-8B-GLIDE';
+const BUILD_TAG = 'FC-9-POCO';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -743,6 +743,40 @@ const SFX = {
   bounce() { if (!AC) return; const t = AC.currentTime;
     tone(130, t, 0.04, 0.05, 'sine', 85);
     noiseBurst(t, 0.025, 0.05, 800, 480, 1.2); },
+  /* ══ THE POCO OPEN — three new physical layers (sfx-quality-bar law) ══ */
+  // a ball off a house: woody door-knock.  Impact click + a hollow stud-bay
+  // body (two detuned low partials) + the muffled low-passed wall slap.
+  thunk(v) { if (!AC) return; const t = AC.currentTime;
+    const k = clamp(v === undefined ? 0.6 : v, 0.15, 1);
+    const dt2 = 1 + (Math.random() - 0.5) * 0.11;
+    noiseBurst(t, 0.006, 0.16 * k, 3800 * dt2, 2100, 0.8, 'highpass');       // the knuckle
+    tone(168 * dt2, t, 0.11, 0.15 * k, 'sine', 96);                          // stud bay
+    tone(252 * dt2 * 1.007, t, 0.085, 0.09 * k, 'triangle', 141);
+    noiseBurst(t, 0.07, 0.12 * k, 520 * dt2, 220, 0.8, 'lowpass'); },        // wall slap
+  // the bucket takes it: hollow plastic TONK, then the ball rattling round
+  // the pail.  Body = a resonant band around 330 Hz over a lowpassed thump;
+  // the rattle is four decaying ticks at shrinking intervals.
+  bucket() { if (!AC) return; const t = AC.currentTime;
+    const dt2 = 1 + (Math.random() - 0.5) * 0.06;
+    noiseBurst(t, 0.012, 0.2, 2600 * dt2, 1400, 1.1, 'highpass');
+    tone(330 * dt2, t, 0.17, 0.15, 'triangle', 196);
+    tone(497 * dt2 * 0.994, t, 0.12, 0.07, 'sine', 300);
+    noiseBurst(t, 0.13, 0.14, 380 * dt2, 190, 0.9, 'lowpass');
+    let at = t + 0.11, gap = 0.072;
+    for (let i = 0; i < 4; i++) {
+      noiseBurst(at, 0.016, 0.085 - i * 0.017, (1500 - i * 220) * dt2, 900, 2.4);
+      tone((430 - i * 52) * dt2, at, 0.05, 0.05 - i * 0.01, 'triangle', (300 - i * 40));
+      at += gap; gap *= 0.78;
+    } },
+  // too hot for the pail: it clanks off the rim and away.  Bright inharmonic
+  // pair (a struck plastic lip) over a very short noise transient.
+  rimclank(v) { if (!AC) return; const t = AC.currentTime;
+    const k = clamp(v === undefined ? 0.7 : v, 0.2, 1);
+    const dt2 = 1 + (Math.random() - 0.5) * 0.1;
+    noiseBurst(t, 0.007, 0.2 * k, 5600 * dt2, 3000, 0.9, 'highpass');
+    tone(1180 * dt2, t, 0.075, 0.1 * k, 'triangle', 720);
+    tone(1873 * dt2 * 1.011, t, 0.055, 0.06 * k, 'sine', 1150);
+    noiseBurst(t + 0.006, 0.05, 0.07 * k, 2300 * dt2, 1200, 3.2); },
   rustle() { if (!AC) return; const t = AC.currentTime;
     noiseBurst(t, 0.3, 0.16, 2200, 4200, 0.8);
     noiseBurst(t + 0.12, 0.24, 0.1, 1600, 3000, 0.8); },
@@ -768,24 +802,59 @@ const SFX = {
     tone(300, t, 0.25, 0.09, 'sine', 120); },
 };
 
-/* ── best round (per difficulty, strokes vs par over 18) ── */
-function loadBest() {
-  try {
-    const v = JSON.parse(localStorage.getItem('fairwayclassic_best'));
-    if (v && typeof v === 'object') return v;
-  } catch (e) {}
-  return {};
+/* ══════════════ THE COURSE DIMENSION ══════════════
+   Two courses share one engine.  COURSE names the live one and CH is the
+   hole array everything downstream reads — the builder, the scorecard, the
+   sweeps.  Magnolia is the default in every old flow, so CH === HOLES until
+   something deliberately asks otherwise.  (POCO_HOLES is defined in the
+   generated part p2b-poco, which runs before anything calls setCourse.) */
+let COURSE = 'magnolia';
+let CH = HOLES;
+function courseHoles(c) { return c === 'poco' ? POCO_HOLES : HOLES; }
+function setCourse(c) {
+  COURSE = (c === 'poco') ? 'poco' : 'magnolia';
+  CH = courseHoles(COURSE);
+  return COURSE;
 }
-function saveBest(diff, vsPar) {
+const COURSE_TITLE = { magnolia: 'MAGNOLIA NATIONAL', poco: 'THE POCO OPEN' };
+
+/* ── best round (per course, per difficulty, strokes vs par) ──
+   v1 stored a FLAT {amateur, pro}.  The POCO shape is
+   {magnolia:{...}, poco:{...}}; the old flat value migrates into magnolia
+   on load (it was a Magnolia round — that is the only course that existed). */
+function loadBest() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem('fairwayclassic_best')); } catch (e) {}
+  const out = { magnolia: {}, poco: {} };
+  if (!raw || typeof raw !== 'object') return out;
+  if (typeof raw.amateur === 'number' || typeof raw.pro === 'number') {
+    if (typeof raw.amateur === 'number') out.magnolia.amateur = raw.amateur;
+    if (typeof raw.pro === 'number') out.magnolia.pro = raw.pro;
+    return out;                                   // the v1 flat shape
+  }
+  for (const c of ['magnolia', 'poco']) {
+    const v = raw[c];
+    if (v && typeof v === 'object') {
+      if (typeof v.amateur === 'number') out[c].amateur = v.amateur;
+      if (typeof v.pro === 'number') out[c].pro = v.pro;
+    }
+  }
+  return out;
+}
+function saveBest(diff, vsPar, course) {
   try {
+    const c = course || COURSE;
     const b = loadBest();
-    if (b[diff] === undefined || vsPar < b[diff]) { b[diff] = vsPar; localStorage.setItem('fairwayclassic_best', JSON.stringify(b)); }
+    if (b[c][diff] === undefined || vsPar < b[c][diff]) {
+      b[c][diff] = vsPar;
+      localStorage.setItem('fairwayclassic_best', JSON.stringify(b));
+    }
   } catch (e) {}
 }
 function vsParStr(v) { return v === 0 ? 'EVEN' : (v > 0 ? '+' + v : String(v)); }
 
 /* game-wide state — declared here, driven by p5 flow */
-let state = 'boot';   // boot|title|diffpick|roundpick|flyover|address|meter|swing|flight|settle|greenread|replay|card|roundend|pause
+let state = 'boot';   // boot|title|coursepick|diffpick|roundpick|flyover|address|meter|swing|flight|settle|greenread|replay|card|roundend|pause
 let PLAYERS = [];     // [{name, colorCls, scores[], ball:{x,y,z}, strokes, holed, lie}]
 let turn = 0;         // whose shot
 </script>

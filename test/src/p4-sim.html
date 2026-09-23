@@ -5,7 +5,8 @@ let DIFF = 'amateur';        // 'amateur' | 'pro'
 const WIND = { mph: 0, dir: 0, ax: 0, az: 0 };
 function rollWind(shot) {
   const rng = Math.random;
-  const max = DIFF === 'pro' ? 15 : 8;
+  // POCO.md: a suburb is calmer than Augusta — 0.6x the gust band
+  const max = (DIFF === 'pro' ? 15 : 8) * (COURSE === 'poco' ? 0.6 : 1);
   if (!shot || WIND.unset !== false || (CUR && CUR.swirl)) {
     WIND.mph = Math.round(rng() * max);
     WIND.dir = rng() * TAU;
@@ -17,6 +18,8 @@ function rollWind(shot) {
 
 /* lie multipliers (design): rough 70% power + wider spread, bunker 55% must
    loft out, fairway/tee/fringe normal */
+/* pavement (7) is a CLEAN lie — full power, putter allowed; it is the
+   bounce and the roll that make it interesting, not the strike */
 function lieMul(lie) { return lie === 0 ? 0.7 : lie === 4 ? 0.55 : 1.0; }
 
 const SHOT = {
@@ -144,7 +147,7 @@ function launchShot(p, power) {
   if (p.lie === 0) ang += (Math.random() - 0.5) * 0.05;
   if (p.lie === 4) ang += (Math.random() - 0.5) * 0.07;
   FLIGHT.on = true; FLIGHT.mode = 'fly'; FLIGHT.t = 0; FLIGHT.treeCool = 0; FLIGHT.touches = 0;
-  FLIGHT.rollT = 0;
+  FLIGHT.rollT = 0; FLIGHT.tramps = 0; FLIGHT.roofT = 0; FLIGHT.rims = 0;
   FLIGHT.runK = runKFor(SHOT.club);
   FLIGHT.touchX = 0; FLIGHT.touchZ = 0; FLIGHT.touchG = 0; FLIGHT.touchSurf = -1;
   FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y + 0.2; FLIGHT.z = p.ball.z;
@@ -162,6 +165,7 @@ function launchPutt(p, power) {
   const mu = greenMu();
   const v0 = Math.sqrt(2 * mu * rollDist);
   FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0; FLIGHT.rollT = 0;
+  FLIGHT.tramps = 0; FLIGHT.roofT = 0; FLIGHT.rims = 0;
   FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y; FLIGHT.z = p.ball.z;
   FLIGHT.vx = Math.sin(SHOT.aimAng) * v0;
   FLIGHT.vz = Math.cos(SHOT.aimAng) * v0;
@@ -176,6 +180,9 @@ function surfMu(s) {
     case 3: return 2.0;
     case 1: case 6: return 2.6;
     case 4: return 9.0;
+    /* 7 PAVEMENT (POCO) — roll friction 35% under short grass: a ball that
+       finds the street keeps going, which is the whole joke of the hole */
+    case 7: return 2.6 * 0.65;
     default: return 6.5;
   }
 }
@@ -189,6 +196,7 @@ function slopeK(s) {
     case 3: return 7.6;
     case 1: case 6: return 7.2;
     case 4: return 2.4;
+    case 7: return 8.4;            // asphalt hands the ball straight to the camber
     /* FC-8: the ROUGH reads its own contour harder than FC-7 let it (4.2).
        The environs are SHAPED now — collection hollows and mounding — and a
        shoulder that kills the ball the instant it lands turns every one of
@@ -210,6 +218,7 @@ function restGrad(s) {
     case 3: return 0.30;
     case 1: case 6: return 0.34;
     case 4: return 0.8;
+    case 7: return 0.22;           // nothing rests on a cambered street
     default: return 0.55;
   }
 }
@@ -221,6 +230,94 @@ function ballGrad(x, z, out) {
   out[1] = (groundH(x, z + 0.6) - groundH(x, z - 0.6)) / 1.2;
   return out;
 }
+/* ═══════════ THE POCO OPEN — houses are giant bumpers ═══════════
+   Every house and public building is an ORIENTED box (POCO.md says AABB;
+   the boxes are yaw-rotated to face their street, so the test runs in the
+   box's OWN frame — an AABB there, and exact against the mesh).
+
+   Kid-proof law: no stroke penalty, no OB.  The ball reflects off whatever
+   face it entered — walls 0.42, roof planes 0.55 — and takes a thunk.
+
+   AND IT NEVER RESTS ON A ROOF.  Every roof contact adds an eave-ward shed
+   impulse plus a minimum upward hop, so the ball walks to the edge and
+   falls off; ROOF_MAX seconds of roof contact is a hard floor that puts it
+   over the nearest eave outright.  The harness fires 40 seeded shots at the
+   houses on 1 and asserts no rest is ever inside, or on top of, a box. */
+const HOUSE_WALL_E = 0.42, HOUSE_ROOF_E = 0.55, ROOF_MAX = 2.2;
+function houseHit() {
+  for (let i = 0; i < HOUSES.length; i++) {
+    const h = HOUSES[i];
+    const dx = FLIGHT.x - h.x, dz = FLIGHT.z - h.z;
+    if (dx * dx + dz * dz > h.rr) continue;
+    if (FLIGHT.y > h.top + 0.02) continue;
+    const u = dx * h.c - dz * h.s, v = dx * h.s + dz * h.c;
+    const penU = h.a - (u < 0 ? -u : u), penV = h.b - (v < 0 ? -v : v);
+    if (penU <= 0 || penV <= 0) continue;
+    const penTop = h.top - FLIGHT.y;
+    let vu = FLIGHT.vx * h.c - FLIGHT.vz * h.s;      // the box's own frame
+    let vv = FLIGHT.vx * h.s + FLIGHT.vz * h.c;
+    const toWorld = () => { FLIGHT.vx = vu * h.c + vv * h.s; FLIGHT.vz = -vu * h.s + vv * h.c; };
+    if (penTop <= penU && penTop <= penV && FLIGHT.vy <= 0) {
+      /* THE ROOF — bounce, then shed toward the nearest eave */
+      FLIGHT.y = h.top;
+      FLIGHT.vy = Math.max(0.55, -FLIGHT.vy * HOUSE_ROOF_E);
+      FLIGHT.roofT = (FLIGHT.roofT || 0) + DT;
+      const shedU = penU <= penV;
+      const sgn = shedU ? (u < 0 ? -1 : 1) : (v < 0 ? -1 : 1);
+      if (shedU) vu += sgn * 2.4; else vv += sgn * 2.4;
+      vu *= 0.86; vv *= 0.86;
+      toWorld();
+      FLIGHT.mode = 'fly';
+      if (FLIGHT.roofT > ROOF_MAX) {                 // the hard floor
+        const ou = shedU ? (h.a + 1.8) * sgn : u, ov = shedU ? v : (h.b + 1.8) * sgn;
+        FLIGHT.x = h.x + ou * h.c + ov * h.s;
+        FLIGHT.z = h.z - ou * h.s + ov * h.c;
+        FLIGHT.vy = -1;
+        FLIGHT.roofT = 0;
+      }
+      if (!QUIET) { SFX.bounce(); SFX.thunk(0.5); }
+      return { ev: 'house', face: 'roof' };
+    }
+    // A WALL — push out of the shallower lateral face and reflect off it
+    if (penU <= penV) {
+      const sgn = u < 0 ? -1 : 1;
+      const ou = (h.a + 0.09) * sgn;
+      FLIGHT.x = h.x + ou * h.c + v * h.s;
+      FLIGHT.z = h.z - ou * h.s + v * h.c;
+      vu = Math.abs(vu) * sgn * HOUSE_WALL_E;
+      vv *= 0.82;
+    } else {
+      const sgn = v < 0 ? -1 : 1;
+      const ov = (h.b + 0.09) * sgn;
+      FLIGHT.x = h.x + u * h.c + ov * h.s;
+      FLIGHT.z = h.z - u * h.s + ov * h.c;
+      vv = Math.abs(vv) * sgn * HOUSE_WALL_E;
+      vu *= 0.82;
+    }
+    toWorld();
+    FLIGHT.vy *= 0.8;
+    if (!QUIET) { SFX.bounce(); SFX.thunk(0.75); }
+    return { ev: 'house', face: 'wall' };
+  }
+  return null;
+}
+/* back-yard trampolines: fun, not sim.  One re-bounce per flight. */
+function trampHit() {
+  if (FLIGHT.vy >= 0 || (FLIGHT.tramps || 0) >= 1) return null;
+  for (let i = 0; i < TRAMPS.length; i++) {
+    const t = TRAMPS[i];
+    if (FLIGHT.y > t.y || FLIGHT.y < t.y - 2.6) continue;
+    const dx = FLIGHT.x - t.x, dz = FLIGHT.z - t.z;
+    if (dx * dx + dz * dz > t.r * t.r) continue;
+    FLIGHT.y = t.y;
+    FLIGHT.vy = -FLIGHT.vy * 1.35;
+    FLIGHT.tramps = (FLIGHT.tramps || 0) + 1;
+    if (!QUIET) { SFX.bounce(); SFX.thunk(0.35); }
+    return { ev: 'tramp' };
+  }
+  return null;
+}
+
 function tickBall() {
   if (!FLIGHT.on) return null;
   FLIGHT.t += DT;
@@ -251,11 +348,24 @@ function tickBall() {
         return { ev: 'tree' };
       }
     }
+    // THE POCO OPEN: the neighborhood is solid.  Both lists are empty on
+    // Magnolia, so this is two length checks there and nothing else.
+    if (HOUSES.length) { const hh = houseHit(); if (hh) return hh; }
+    if (TRAMPS.length) { const th = trampHit(); if (th) return th; }
     const g = groundH(FLIGHT.x, FLIGHT.z);
     if (FLIGHT.y <= g && FLIGHT.vy < 0) {
       FLIGHT.y = g;
       const s = surfAt(FLIGHT.x, FLIGHT.z);
       if (s === 5) return waterIn();
+      /* the bucket takes an ARRIVING ball too — drop one in from the sky at
+         walking pace and it is holed, which is what bucket golf is for */
+      if (BUCKET) {
+        const bdx = FLIGHT.x - BUCKET.x, bdz = FLIGHT.z - BUCKET.z;
+        if (bdx * bdx + bdz * bdz < BUCKET.r * BUCKET.r &&
+            Math.hypot(FLIGHT.vx, FLIGHT.vz) < 6 && FLIGHT.vy > -16) {
+          FLIGHT.on = false; return { ev: 'holed' };
+        }
+      }
       const speed = Math.hypot(FLIGHT.vx, FLIGHT.vz);
       if (s === 4) {   // plugs in sand
         if (!QUIET) { SFX.sand(); burst(psSand, FLIGHT.x, g + 0.2, FLIGHT.z, 16, 1.4, 1.2); }
@@ -267,7 +377,9 @@ function tickBall() {
       // keep = horizontal speed surviving a touch (backspin-ish on greens).
       FLIGHT.touches = (FLIGHT.touches || 0) + 1;
       const keep = s === 2 ? (DIFF === 'pro' ? 0.17 : 0.11)
-                 : s === 3 ? 0.18 : s === 0 ? 0.12 : 0.28;
+                 : s === 3 ? 0.18 : s === 0 ? 0.12
+                 : s === 7 ? 0.392            // POCO pavement: +40% restitution
+                 : 0.28;
       /* FC-7: the BOUNCE reads the ground too — land on a downslope and the
          ball kicks on and runs; land into a rise and it stands up and dies.
          FC-8: how hard it reads the ground, and how much speed survives at
@@ -317,6 +429,7 @@ function tickBall() {
      downhill runs out, sidehill kicks to the low side, uphill kills it. */
   const g = groundH(FLIGHT.x, FLIGHT.z);
   FLIGHT.y = g;
+  if (HOUSES.length) { const hh = houseHit(); if (hh) return hh; }
   const s = surfAt(FLIGHT.x, FLIGHT.z);
   if (s === 5) return waterIn();
   ballGrad(FLIGHT.x, FLIGHT.z, _gr);
@@ -342,14 +455,18 @@ function tickBall() {
   // the cup
   const dPin = distToPin(FLIGHT.x, FLIGHT.z);
   const sp2 = Math.hypot(FLIGHT.vx, FLIGHT.vz);
-  if (dPin < 0.42) {
-    if (sp2 < 5.4) { FLIGHT.on = false; return { ev: 'holed' }; }
-    // lip out: deflect
+  /* THE BUCKET (POCO) is a slightly bigger target than a cup and takes the
+     ball up to 6 yd/s; above that it CLANKS off the rim and away. */
+  const capR = BUCKET ? BUCKET.r : 0.42, capV = BUCKET ? 6 : 5.4;
+  if (dPin < capR) {
+    if (sp2 < capV) { FLIGHT.on = false; return { ev: 'holed' }; }
+    // rim out: deflect
     const nx = (FLIGHT.x - PIN.x) / (dPin || 1), nz = (FLIGHT.z - PIN.z) / (dPin || 1);
     const dot = FLIGHT.vx * nx + FLIGHT.vz * nz;
     FLIGHT.vx -= 1.6 * dot * nx; FLIGHT.vz -= 1.6 * dot * nz;
     FLIGHT.vx *= 0.55; FLIGHT.vz *= 0.55;
-    if (!QUIET) SFX.bounce();
+    FLIGHT.rims = (FLIGHT.rims || 0) + 1;
+    if (!QUIET) { if (BUCKET) SFX.rimclank(clamp(sp2 / 12, 0.2, 1)); else SFX.bounce(); }
   }
   /* A ball only RESTS where the ground lets it: if the local gradient can
      still beat the turf, it keeps going (this is what makes 9's false
@@ -400,6 +517,7 @@ function simulateRollout(x, y, z, vx, vy, vz, runK, out) {
   QUIET++;
   FLIGHT.on = true; FLIGHT.mode = 'fly'; FLIGHT.t = 0; FLIGHT.rollT = 0;
   FLIGHT.touches = 0; FLIGHT.treeCool = 1e6;      // the arc already flew the canopies
+  FLIGHT.tramps = 0; FLIGHT.roofT = 0; FLIGHT.rims = 0;
   FLIGHT.runK = runK;
   FLIGHT.x = x; FLIGHT.y = y; FLIGHT.z = z;
   FLIGHT.vx = vx; FLIGHT.vy = vy; FLIGHT.vz = vz;
