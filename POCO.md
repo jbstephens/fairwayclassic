@@ -205,3 +205,83 @@ Flyover + birdie cardinal beat work unchanged (bucket rim perch!).
 Moving hazards (mail truck, joggers, recess crowds), sprinkler
 timers, Golf Galaxy pro-shop storefront gag, downtown bonus targets,
 PoCo-specific birdie beat, separate arcade menu tile (?course=poco).
+
+# FC-10 — THE PLACE IS THE COURSE (playtest redesign, decided 2026-09-23)
+
+V1 verdict (family playtest): the neighborhood mapping is right, but the
+extruded fairway corridors erased it — holes feel alike, landmarks don't
+read, you can't tell where you are. FC-10 deletes the golf-course
+furniture. THE MAP IS THE PLAYFIELD. North star: the player can always
+TELL where they are in PoCo.
+
+## Ground truth (poco only; magnolia untouched)
+
+Surface priority, highest wins, everywhere in the corridor:
+water > diamond-infield sand > pavement (asphalt / concrete walk /
+painted court / hardpan / driveways) > LAWN (per-lot, the watered↔dry
+palette stays and now matters: watered = clean lie, dry = scruffy) >
+park/field grass > SCRUFF (unclaimed ground: dry weeds/ivy/bare dirt —
+playable, lieMul 0.75, slow). NO fairway, NO tee boxes, NO fringe on
+poco. Region codes 1/3/6 must not appear in any poco ground index.
+
+- Tee = a RUBBER DOORMAT mesh dropped on the tee lawn.
+- "Green" = the LAWN THE BUCKET SITS ON (mown a shade brighter, normal
+  putting there; green-read arrows work on it).
+- Streets = bouncy cart-path play: existing pavement physics PLUS CURBS:
+  ~0.15yd lip at every street edge (baked visual + physics). A ball
+  crossing a curb slow from the street side stalls into the GUTTER and
+  runs along the curb line downhill. Fun-frustrating, deliberate.
+- Fences between back yards (low white/grey pickets + grape-stake, 0.9yd,
+  merged): the thing that makes a lawn hop a CARRY. Ball hits fence =
+  woody thunk + drop on the hit side.
+- Micro-obstacles along streets: mailboxes, driveway basketball hoops,
+  parked cars (2-box lowpoly, muted palette). All merged, all static.
+
+## Water bugs (v1, must-fix, harness-asserted)
+
+- The bucket must be DRY: pin validation on poco extends to ALL water —
+  scenery pools, strips, ponds, creeks — ≥3yd clearance + puttable ring
+  on its lawn. Assert on all 9 (v1 shipped hole 9's bucket IN the pool).
+- No lot may intersect any water polygon nor sit below the local water
+  surface + 0.3yd (v1 shipped underwater houses). Assert zero across 9.
+
+## Routing: lawn-to-lawn REACHABILITY LAW
+
+The hole is a chain of grassy areas. The converter asserts: from the tee
+lawn to the bucket lawn there is always a next landable grassy area
+(lawn, park, field, canal verge — anything the map says is grass) within
+190y of the current one, with a landing patch ≥ 8yd across. Where the
+chain breaks, re-route the hole (routing changes are pre-authorized).
+The harness proves it live: a bot using the real integrator + planner
+finishes every hole ≤ +3. Re-anchor hole 1: tee lawn at lat 37.94150,
+lon -122.07214, playing NE up Soule toward the school; the mined creek
+near that tee comes along automatically as real water (do not label the
+tee lot; no annotation about the anchor's meaning anywhere in code).
+
+## The TELL-WHERE-I-AM kit (the point of FC-10)
+
+1. STREET BLADE SIGNS at real intersections, real names, both blades —
+   one shared baked canvas text atlas, merged geometry.
+2. HUD LOCATION LINE: current street / landmark name as the ball
+   crosses it ("SOULE AVE", "SEQUOIA ELEMENTARY", "MURDERERS CREEK"),
+   from nearest street polyline / region. Rate-limited, quiet.
+3. FLYOVER CALLOUTS: floating name sprites during each hole flyover for
+   the 2–3 landmarks/streets the hole tours.
+4. LANDMARK IDENTITY KIT: Sequoia flagpole + backstops (keep canopies),
+   Christ the King steeple + cross, pool decks + pool fences, canal
+   gravel trail with grass verge, City Hall civic portico columns.
+5. Minimap: keep streets, ADD landable grass patches as lighter blobs
+   (the strategic layer players plan chains on).
+
+## Verification (Tier 3 bar again)
+
+All magnolia suites byte-identical expectations (336 baseline may
+renumber only within PART P). PART P rewritten to the new ground truth
++ new checks: no fairway codes on poco; bucket dry ×9; zero underwater
+lots ×9; reachability chain ×9; bot completes ×9 ≤ +3; curb gutter run
+observed; fence carry + thunk; doormat present; HUD location fires on
+1 (SOULE AVE) and 3 (MURDERERS CREEK); signs present at ≥ N real
+intersections per hole where streets exist; flyover callouts ≥2 on
+every hole. Screenshots per hole LOOKED AT; perf: tris ≤60k, calls ≤
+magnolia's 40, desktop build <400ms/hole. Pi after ship: 60fps on
+1/6/9 + flight, sweep worst <400ms.

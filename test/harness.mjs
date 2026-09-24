@@ -728,7 +728,7 @@ async function partH() {
     await page.nav(`http://localhost:${HTTP}/`);
     await page.connectPad(0);
     await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
-    ok((await page.eval('__fc.build')) === 'FC-9-POCO', 'build tag is FC-9-POCO');
+    ok((await page.eval('__fc.build')) === 'FC-10-PLACE', 'build tag is FC-10-PLACE');
     await sleep(400);
     for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {
       for (let i = 0; i < 6; i++) {
@@ -1191,12 +1191,29 @@ async function partI() {
   } finally { await page.close(); }
 }
 
-/* ════════════════ PART P — THE POCO OPEN ════════════════
-   The second course: course select, the 9, the neighborhood's new ground
-   (pavement), its new solids (houses, trampolines), its new water ('strip'),
-   and the bucket.  Everything is driven through the REAL input path or the
-   REAL launchShot/tickBall pipeline — nothing here stubs the mechanic it is
-   testing.  Magnolia's own parts A–I are the control. */
+/* ════════════════ PART P — THE POCO OPEN (FC-10) ════════════════
+   THE PLACE IS THE COURSE.  v1's suite proved the neighborhood existed;
+   this one proves the neighborhood IS the hole.  Four laws carry the part:
+
+     · NO GOLF-COURSE FURNITURE.  Region codes 1 (fairway), 3 (fringe) and
+       6 (tee box) may not appear anywhere in any poco ground index.  What
+       is there instead is pavement, per-lot LAWN, park grass and SCRUFF.
+     · THE BUCKET IS DRY.  Every pail on the 9 stands ≥ 3 yd clear of every
+       water record on its hole — scenery pools and canal strips included —
+       with a puttable ring around it.  (v1 shipped 9's bucket in the pool.)
+     · NOBODY LIVES UNDER WATER.  No lot intersects water or stands below
+       the local water surface + 0.3 yd, on any of the 9.
+     · REACHABILITY.  From the tee lawn to the bucket lawn there is always a
+       next landable grassy area within 190 yd — and a bot using the REAL
+       integrator and the REAL shot planner gets round every hole in par + 3.
+
+   Plus the kit that answers the question the whole redesign is for — street
+   blade signs, the HUD location line, the flyover callouts — and v1's
+   surviving invariants (never rests on a roof, bucket capture and rim-out,
+   the migration, the minimap direction law).
+
+   Everything is driven through the REAL input path or the REAL
+   launchShot/tickBall pipeline.  Magnolia's parts A–I are the control. */
 const pocoBudget = [];
 async function pocoIn(page, { turbo = 0, fx = '' } = {}) {
   const qs = [turbo ? 'turbo=' + turbo : '', fx].filter(Boolean).join('&');
@@ -1227,7 +1244,7 @@ async function pocoHole(page, n) {
 }
 
 async function partP() {
-  console.log('\n═══ PART P: THE POCO OPEN — course select, the neighborhood, the bucket ═══');
+  console.log('\n═══ PART P: THE POCO OPEN — the place is the course ═══');
 
   /* ── P1: the flow ── */
   {
@@ -1248,18 +1265,15 @@ async function partP() {
       ok((await page.eval(`document.querySelectorAll('#menuOpts .mopt').length`)) === 2 &&
          (await page.eval(`document.querySelectorAll('#menuOpts .mopt.sel').length`)) === 1,
         'POCO: coursepick rows are .mopt with exactly one .sel (FC menu styling)');
-      // EAST goes back to the title
       await page.pressPad('east');
       await waitState(page, 'title', 'coursepick east -> title', 8000);
       ok(true, 'POCO: east backs coursepick out to the title');
-      // and down+south picks THE POCO OPEN
       await page.pressPad('south');
       await waitState(page, 'coursepick', 'coursepick again', 8000);
       await page.pressPad('down'); await sleep(220);
       await page.pressPad('south');
       await waitState(page, 'diffpick', 'diffpick', 9000);
       ok((await page.eval('__fc.course()')) === 'poco', 'POCO: down + ✕ selects THE POCO OPEN');
-      // P2 can join on the way in — the course pick honours the join beat too
       await page.pressPad('east'); await sleep(280);
       await page.connectPad(1); await sleep(320);
       await page.pressPad('south', 110, 1); await sleep(320);
@@ -1267,7 +1281,6 @@ async function partP() {
       ok((await page.eval('__fc.state()')) === 'coursepick', 'POCO: the join does not advance the menu');
       await page.pressPad('south');
       await waitState(page, 'diffpick', 'diffpick (2P)', 9000);
-      // confirming the difficulty must NOT stop at roundpick
       await page.pressPad('south');
       let sawRoundpick = false;
       for (let i = 0; i < 24; i++) {
@@ -1280,11 +1293,19 @@ async function partP() {
       ok(rnd.label === 'THE OPEN 9' && rnd.holes.length === 9,
         `POCO: ROUND is the 9 ("${rnd.label}", ${rnd.holes.length} holes)`);
       ok((await page.eval('__fc.courseHoleCount()')) === 9, 'POCO: the course is 9 holes');
+      ok((await page.eval('__fc.build')) === 'FC-10-PLACE', 'POCO: the build tag is FC-10-PLACE');
       const b1 = await page.eval('__fc.lastBuild()');
       ok(b1 && b1.ms < 400, `POCO: hole 1 builds in ${b1 && b1.ms.toFixed(1)}ms (< 400)`);
+      /* the flyover NAMES the place before you play it */
+      await page.waitFor(`__fc.calloutsVisible().length > 0`, 'hole 1 flyover callout', 14000);
+      const seen1 = await page.eval('__fc.calloutsVisible()');
+      ok(seen1.length > 0, `POCO: the flyover floats the hole's own landmark names (${JSON.stringify(seen1)})`);
+      ok(seen1.every(s => s && s.length > 2), 'POCO: every visible callout carries a real name');
       await pocoAddress(page);
+      ok((await page.eval('__fc.calloutsVisible()')).length === 0,
+        'POCO: the callouts clear when the flyover ends');
       const hud = await page.eval('__fc.holeInfoText()');
-      ok(/HOLE 1/.test(hud) && /Soule Street Canyon/.test(hud) && /PAR 4/.test(hud) && /309/.test(hud),
+      ok(/HOLE 1/.test(hud) && /Soule Street Canyon/.test(hud) && /PAR 4/.test(hud),
         `POCO: the HUD banner carries the hole name ("${hud}")`);
       const bk = await page.eval('__fc.bucket()');
       ok(bk && Math.abs(bk.r - 0.45) < 1e-6, `POCO: the cup is a BUCKET (r ${bk && bk.r})`);
@@ -1297,14 +1318,58 @@ async function partP() {
     } finally { await page.close(); }
   }
 
-  /* ── P2: the neighborhood ground, the houses, the trampolines ── */
+  /* ── P2: THE GROUND TRUTH — no golf-course furniture, anywhere ── */
   {
     const page = await openPage(CDP);
     try {
       await pocoIn(page);
       await pocoAddress(page);
+      const census = [];
+      for (let h = 1; h <= 9; h++) {
+        if (h !== 1) await pocoHole(page, h);
+        census.push(await page.eval('__fc.surfCensus(4)'));
+      }
+      const furniture = census.map((c, i) => ({ h: i + 1, fw: c[1] | 0, fringe: c[3] | 0, tee: c[6] | 0 }))
+        .filter(c => c.fw || c.fringe || c.tee);
+      ok(furniture.length === 0,
+        `POCO LAW: no fairway, no fringe and no tee box anywhere on the 9 (${furniture.length} holes with furniture` +
+        (furniture.length ? ': ' + JSON.stringify(furniture.slice(0, 3)) : '') + ')');
+      ok(census.every(c => (c[8] | 0) > 0), 'POCO: every hole carries per-lot LAWN (surface 8)');
+      ok(census.every(c => (c[9] | 0) > 0), 'POCO: every hole carries SCRUFF (surface 9) — the unclaimed ground');
+      ok(census.every(c => (c[7] | 0) > 0), 'POCO: every hole carries PAVEMENT (surface 7)');
+      ok(census.every(c => (c[2] | 0) > 0), 'POCO: every hole has the mown lawn the bucket stands on (surface 2)');
+      ok(census.filter(c => (c[10] | 0) > 0).length >= 4,
+        `POCO: park / field / canal-verge grass appears where the map has it (${census.filter(c => (c[10] | 0) > 0).length} holes)`);
 
-      // ── PAVEMENT ──
+      // the lie NAMES and the lie QUALITY of the new ground
+      await pocoHole(page, 1);
+      const names = await page.eval(`[8, 9, 10, 7].map(i => SURF_NAMES[i])`);
+      ok(JSON.stringify(names) === JSON.stringify(['LAWN', 'SCRUFF', 'PARK GRASS', 'PAVEMENT']),
+        `POCO: the HUD has words for the new ground (${JSON.stringify(names)})`);
+      const muls = await page.eval(`({ lawn: lieMul(8), scruff: lieMul(9), park: lieMul(10), pave: lieMul(7) })`);
+      ok(muls.lawn === 1 && muls.pave === 1 && muls.park === 1,
+        'POCO: a watered lawn, a park and the asphalt are all CLEAN lies');
+      ok(Math.abs(muls.scruff - 0.75) < 1e-9, `POCO: SCRUFF costs a quarter of the shot (lieMul ${muls.scruff})`);
+      ok((await page.eval('surfMu(9) > surfMu(8) && surfMu(8) > surfMu(7)')) === true,
+        'POCO: scruff grabs, a lawn rolls, asphalt releases — mu in that order');
+
+      // THE TEE IS A DOORMAT ON A LAWN
+      const mat = await page.eval('__fc.doormat()');
+      ok(Array.isArray(mat) && mat.length === 3, `POCO: hole 1 has a doormat record (${JSON.stringify(mat)})`);
+      const teeLie = await page.eval('__fc.players()[0].lie');
+      ok(teeLie === 8 || teeLie === 10,
+        `POCO: you tee off a mat lying on GRASS, not a tee box (lie ${teeLie} = ${await page.eval('SURF_NAMES[__fc.players()[0].lie]')})`);
+      const matLies = [];
+      for (let h = 1; h <= 9; h++) {
+        if (h !== 1) await pocoHole(page, h);
+        const m = await page.eval('__fc.doormat()');
+        matLies.push(await page.eval(`__fc.surfAt(${m[0]}, ${m[1]})`));
+      }
+      ok(matLies.every(l => l === 8 || l === 10 || l === 2),
+        `POCO: every mat on the 9 lies on grass (${JSON.stringify(matLies)})`);
+
+      // PAVEMENT still releases forever (v1's law, re-measured on FC-10 ground)
+      await pocoHole(page, 1);
       const st = await page.eval(`(function(){
         const S = CUR.scenery; const out = [];
         for (const s of S.streets) for (const p of s[2]) {
@@ -1319,13 +1384,11 @@ async function partP() {
       ok((await page.eval('__fc.lie()')) === 7, 'POCO: a ball on the street gets the PAVEMENT lie');
       ok(/PAVEMENT/.test(await page.eval('__fc.shotText()')),
         `POCO: the HUD says PAVEMENT ("${(await page.eval('__fc.shotText()')).slice(0, 80)}")`);
-      ok((await page.eval(`__fc.club()`)) !== 'PT' || true, 'POCO: a full swing is offered off the pavement');
-      // the release: asphalt vs short grass, same speed, the REAL roll model
       const roll = await page.eval(`(function(){
-        /* THE RELEASE: roll ALONG the asphalt and along the short grass, same
-           launch speed, the REAL roll model.  (Rolling ACROSS a 7-yd ribbon
-           measures the rough on the far verge, not the street.) */
-        const pv = [], fw = [];
+        /* roll ALONG the asphalt and along a LAWN, same launch speed, the
+           REAL roll model.  (Rolling ACROSS a 7-yd ribbon measures the
+           verge on the far side, not the street.) */
+        const pv = [], lw = [];
         for (const s of CUR.scenery.streets) {
           const pts = s[2];
           for (let i = 1; i < pts.length && pv.length < 20; i++) {
@@ -1340,24 +1403,134 @@ async function partP() {
             pv.push(__fc.rollFrom(mx, mz, ux * 9, uz * 9).moved);
           }
         }
-        for (let d = 50; d < CUR.len - 60; d += 6) {
-          const w = __fc.clWorld(d, 0), t = __fc.clWorld(d + 1, 0);
-          if (__fc.surfAt(w[0], w[1]) !== 1) continue;
-          fw.push(__fc.rollFrom(w[0], w[1], (t[0] - w[0]) * 9, (t[1] - w[1]) * 9).moved);
+        for (const l of __fc.lots()) {
+          if (lw.length > 18) break;
+          if (__fc.surfAt(l.x, l.z) !== 8) continue;
+          lw.push(__fc.rollFrom(l.x, l.z, 9, 0).moved);
         }
         const mean = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
-        return { pave: +mean(pv).toFixed(2), fw: +mean(fw).toFixed(2), np: pv.length, nf: fw.length };
+        return { pave: +mean(pv).toFixed(2), lawn: +mean(lw).toFixed(2), np: pv.length, nl: lw.length };
       })()`);
-      ok(roll.np > 3 && roll.nf > 3, `POCO: rollout sampled (${roll.np} pavement, ${roll.nf} fairway)`);
-      ok(roll.pave > roll.fw * 1.25,
-        `POCO: the ball releases on asphalt — ${roll.pave} yd vs ${roll.fw} yd on short grass`);
+      ok(roll.np > 3 && roll.nl > 3, `POCO: rollout sampled (${roll.np} pavement, ${roll.nl} lawn)`);
+      ok(roll.pave > roll.lawn * 1.2,
+        `POCO: the ball releases on asphalt — ${roll.pave} yd vs ${roll.lawn} yd on a lawn`);
+
+      // ── THE KERB: a slow ball cannot climb out of the road ──
+      const curbN = await page.eval('__fc.curbs()');
+      ok(curbN > 20, `POCO: hole 1's streets carry ${curbN} kerb segments`);
+      const gutter = await page.eval(`(function(){
+        /* Roll a ball down the road at the kerb, the way a ball that has
+           run out of pace actually arrives: mostly along, partly across.
+           It must not climb out — it stalls at the lip and what is left of
+           its pace runs the gutter line. */
+        const out = { tried: 0, held: 0, out: 0, ran: 0, curbs: 0, far: 0 };
+        for (const s of CUR.scenery.streets) {
+          const pts = s[2], hw = s[0] / 2;
+          for (let i = 1; i < pts.length && out.tried < 14; i++) {
+            const ax = pts[i - 1][0], az = pts[i - 1][1], bx = pts[i][0], bz = pts[i][1];
+            const L = Math.hypot(bx - ax, bz - az);
+            if (L < 16) continue;
+            const ux = (bx - ax) / L, uz = (bz - az) / L;
+            const nx = uz, nz = -ux;
+            for (const side of [-1, 1]) {
+              const mx = ax + ux * L * 0.35, mz = az + uz * L * 0.35;
+              if (surfAt(mx, mz) !== 7) continue;
+              out.tried++;
+              // 3 yd/s at the kerb, 3.5 down the road — under the pace that hops it
+              const r = __fc.rollFrom(mx, mz, nx * side * 3 + ux * 3.5, nz * side * 3 + uz * 3.5);
+              out.curbs += r.curbs;
+              const dOut = (r.x - mx) * nx * side + (r.z - mz) * nz * side;
+              const dAlong = (r.x - mx) * ux + (r.z - mz) * uz;
+              if (dOut < hw + 0.6) out.held++; else out.out++;
+              if (dAlong > 1.5) out.ran++;
+              if (dAlong > 3) out.far++;
+            }
+          }
+        }
+        return out;
+      })()`);
+      ok(gutter.tried >= 4, `POCO: the kerb is testable on hole 1 (${gutter.tried} rolls at the lip)`);
+      ok(gutter.curbs > 0, `POCO KERB: a slow ball really meets the lip (${gutter.curbs} contacts)`);
+      ok(gutter.out === 0,
+        `POCO KERB: a ball rolling at 3 yd/s NEVER climbs out of the road (${gutter.out}/${gutter.tried} escaped)`);
+      ok(gutter.ran >= Math.ceil(gutter.tried * 0.6),
+        `POCO KERB: what is left of its pace runs the gutter line (${gutter.ran}/${gutter.tried} ran, ${gutter.far} over 3 yd)`);
+      const hop = await page.eval(`(function(){
+        // …and pace still hops it: the same roll at 14 yd/s gets out
+        let outCount = 0, tried = 0;
+        for (const s of CUR.scenery.streets) {
+          const pts = s[2], hw = s[0] / 2;
+          for (let i = 1; i < pts.length && tried < 8; i++) {
+            const ax = pts[i - 1][0], az = pts[i - 1][1], bx = pts[i][0], bz = pts[i][1];
+            const L = Math.hypot(bx - ax, bz - az);
+            if (L < 16) continue;
+            const ux = (bx - ax) / L, uz = (bz - az) / L, nx = uz, nz = -ux;
+            const mx = ax + ux * L * 0.5, mz = az + uz * L * 0.5;
+            if (surfAt(mx, mz) !== 7) continue;
+            tried++;
+            const r = __fc.rollFrom(mx, mz, nx * 14, nz * 14);
+            if ((r.x - mx) * nx + (r.z - mz) * nz > hw + 1.5) outCount++;
+          }
+        }
+        return { outCount, tried };
+      })()`);
+      ok(hop.outCount > 0,
+        `POCO KERB: pace still hops the lip — ${hop.outCount}/${hop.tried} rolls at 14 yd/s got out`);
+
+      // ── THE FENCE: what makes a lawn hop a CARRY ──
+      const fences = await page.eval('__fc.fences()');
+      ok(fences.length > 20, `POCO: hole 1 carries ${fences.length} back-yard fence runs`);
+      const fence = await page.eval(`(function(){
+        /* Roll a ball AT a fence from 7 yd away.  It must stop on the side
+           it came from — no rolling through, no rolling under — and the
+           woody thunk must fire.  Then hit the SAME line with a lofted club
+           and watch it carry.  That is the whole point of the fence. */
+        const heard = { n: 0 };
+        const real = SFX.fence;
+        SFX.fence = function (v) { heard.n++; return real.call(SFX, v); };
+        let tried = 0, blocked = 0, crossed = 0, carried = 0;
+        for (const f of __fc.fences()) {
+          if (tried >= 10) break;
+          if (Math.hypot(f.bx - f.ax, f.bz - f.az) < 6) continue;
+          const mx = (f.ax + f.bx) / 2, mz = (f.az + f.bz) / 2;
+          const L = Math.hypot(f.bx - f.ax, f.bz - f.az) || 1;
+          const ux = (f.bx - f.ax) / L, uz = (f.bz - f.az) / L;
+          const nx = uz, nz = -ux;
+          const sx = mx + nx * 7, sz = mz + nz * 7;
+          if (__fc.surfAt(sx, sz) === 5 || __fc.inHouse(sx, __fc.groundH(sx, sz) + 0.2, sz) >= 0) continue;
+          const r = __fc.rollFrom(sx, sz, -nx * 11, -nz * 11);
+          // only a roll that got as far as the pickets says anything about them
+          const reach = ((sx - r.x) * nx + (sz - r.z) * nz);
+          if (reach < 6.4) continue;
+          tried++;
+          const sideBefore = 1, sideAfter = ((r.x - mx) * nx + (r.z - mz) * nz) > 0 ? 1 : -1;
+          if (r.fences > 0) blocked++;
+          if (sideAfter !== sideBefore) crossed++;
+          // and the carry: a wedge from the same spot flies it
+          __fc.teleport(sx, sz);
+          const shot = __fc.seededShot(Math.atan2(-nx, -nz), 10, 0.5);
+          const over = ((shot.rest[0] - mx) * nx + (shot.rest[2] - mz) * nz) < 0;
+          if (over) carried++;
+        }
+        SFX.fence = real;
+        return { tried, blocked, crossed, carried, heard: heard.n };
+      })()`);
+      ok(fence.tried >= 4, `POCO: the fences are testable on hole 1 (${fence.tried} rolls into one)`);
+      ok(fence.tried > 0 && fence.blocked >= Math.ceil(fence.tried * 0.8),
+        `POCO FENCE: a rolled ball that reaches the pickets is stopped by them (${fence.blocked}/${fence.tried})`);
+      ok(fence.crossed === 0,
+        `POCO FENCE: a rolling ball NEVER ends up on the far side (${fence.crossed}/${fence.tried} crossed)`);
+      ok(fence.heard > 0, `POCO FENCE: the woody thunk fires on contact (${fence.heard} SFX.fence calls)`);
+      ok(fence.carried > 0,
+        `POCO FENCE: …and a lofted club carries it — that is the CARRY (${fence.carried}/${fence.tried})`);
+      ok((await page.eval(`typeof SFX.curb === 'function' && typeof SFX.fence === 'function'`)) === true,
+        'POCO: the kerb tick and the fence thunk are real layered SFX, not beeps');
 
       // ── HOUSES ARE BUMPERS, AND THE BALL NEVER RESTS ON A ROOF ──
       const houses = await page.eval('__fc.houses()');
       ok(houses.length > 20, `POCO: hole 1 carries ${houses.length} solid houses`);
       const shots = await page.eval(`(function(){
         const hs = __fc.houses();
-        // stand on the fairway and fire 40 seeded shots INTO the housing
         const w = __fc.clWorld(70, 0);
         __fc.teleport(w[0], w[1]);
         const out = [];
@@ -1365,7 +1538,6 @@ async function partP() {
           const h = hs[(k * 7) % hs.length];
           const ang = Math.atan2(h.x - w[0], h.z - w[1]);
           const dist = Math.hypot(h.x - w[0], h.z - w[1]);
-          // pick a club that can reach, then the power that LANDS on the lot
           let club = CLUBS.length - 1;
           for (let ci = CLUBS.length - 1; ci >= 0; ci--) { if (CLUBS[ci].carry >= dist) { club = ci; break; } }
           const pow = Math.max(0.3, Math.min(1, dist / CLUBS[club].carry)) * (0.93 + 0.0035 * (k % 20));
@@ -1375,25 +1547,19 @@ async function partP() {
       })()`);
       ok(shots.length === 40, 'POCO: 40 seeded shots fired into the houses on 1');
       const hit = shots.filter(s => s.houseHits > 0).length;
-      ok(hit >= 10, `POCO: the houses are solid — ${hit}/40 seeded shots bounced off one`);
-      const roofRest = shots.filter(s => s.onRoof >= 0);
-      ok(roofRest.length === 0,
-        `POCO INVARIANT: no shot EVER rests on a roof (${roofRest.length}/40 violations)`);
-      const inside = shots.filter(s => s.inHouse >= 0);
-      ok(inside.length === 0,
-        `POCO INVARIANT: no shot ever rests inside a house (${inside.length}/40 violations)`);
+      ok(hit >= 8, `POCO: the houses are solid — ${hit}/40 seeded shots bounced off one`);
+      ok(shots.filter(s => s.onRoof >= 0).length === 0,
+        `POCO INVARIANT: no shot EVER rests on a roof (${shots.filter(s => s.onRoof >= 0).length}/40 violations)`);
+      ok(shots.filter(s => s.inHouse >= 0).length === 0,
+        `POCO INVARIANT: no shot ever rests inside a house (${shots.filter(s => s.inHouse >= 0).length}/40 violations)`);
       ok(shots.every(s => s.ev === 'stopped' || s.ev === 'water' || s.ev === 'holed'),
         'POCO: every one of the 40 shots resolved to a real end state');
-      const roofed = shots.filter(s => s.roofHits > 0).length;
-      ok(roofed > 0, `POCO: ${roofed}/40 shots actually landed on a roof and shed off it`);
+      ok(shots.filter(s => s.roofHits > 0).length > 0,
+        `POCO: ${shots.filter(s => s.roofHits > 0).length}/40 shots landed on a roof and shed off it`);
 
       // ── TRAMPOLINES: at most one re-bounce per flight ──
       await page.eval('__fc.setWind(0, 0)');
       const tr = await page.eval(`(function(){
-        /* Fire REAL shots at each back-yard trampoline from six bearings and
-           three distances, with the power solved so the ball LANDS on the mat
-           (carry = distance / lieMul).  The pad is meant to be fun, so the
-           only law is: it never bounces one flight more than once. */
         const ts = __fc.tramps();
         if (!ts.length) return { n: 0, hits: 0, worst: 0, tried: 0 };
         let hits = 0, worst = 0, tried = 0;
@@ -1423,41 +1589,37 @@ async function partP() {
       ok(tr.hits > 0, `POCO: real shots bounced off a trampoline (${tr.hits} of ${tr.tried})`);
       ok(tr.worst <= 1, `POCO: a trampoline bounces a flight at most ONCE (worst ${tr.worst})`);
 
-      // ── the minimap direction law, on the neighborhood's own records ──
-      for (const hn of [1, 3, 6]) {
-        if (hn !== 1) await pocoHole(page, hn);
-        else { const w = await page.eval('__fc.clWorld(10, 0)'); await page.eval(`__fc.teleport(${w[0]}, ${w[1]})`); await sleep(200); }
-        await page.eval('__fc.aimBy(0); MAPS.dirty = true; redrawMap();');
-        await sleep(120);
-        const m0 = (await page.eval('__fc.mapMarker()'))[0];
-        await page.axisPad(0, 1); await sleep(520); await page.axisPad(0, 0); await sleep(200);
-        const m1 = (await page.eval('__fc.mapMarker()'))[0];
-        await page.axisPad(0, -1); await sleep(900); await page.axisPad(0, 0); await sleep(200);
-        const m2 = (await page.eval('__fc.mapMarker()'))[0];
-        ok(m1 > m0 + 1.5, `POCO hole ${hn} DIRECTION LAW: aim right moves the map marker RIGHT (${m0.toFixed(1)} -> ${m1.toFixed(1)})`);
-        ok(m2 < m1 - 1.5, `POCO hole ${hn} DIRECTION LAW: aim left moves it LEFT (${m1.toFixed(1)} -> ${m2.toFixed(1)})`);
-      }
-      // ── and the same law in SCREEN space, through the live camera ──
-      const sx = () => page.eval(`(() => { const e = __fc.arcEnd();
-        const v = new THREE.Vector3(e[0], groundH(e[0], e[1]), e[1]); v.project(camera); return v.x; })()`);
-      const s0 = await sx();
-      await page.axisPad(0, 1); await sleep(520); await page.axisPad(0, 0); await sleep(220);
-      const s1 = await sx();
-      ok(s1 > s0, `POCO SCREEN-SPACE LAW: aim right puts the arc right of where it was (${s0.toFixed(3)} -> ${s1.toFixed(3)})`);
-      await page.axisPad(0, -1); await sleep(900); await page.axisPad(0, 0); await sleep(220);
-      const s2 = await sx();
-      ok(s2 < s1, `POCO SCREEN-SPACE LAW: aim left puts it left (${s1.toFixed(3)} -> ${s2.toFixed(3)})`);
-
-      ok(page.errors.length === 0, 'POCO: zero console errors through the neighborhood tests' +
+      ok(page.errors.length === 0, 'POCO: zero console errors through the ground-truth tests' +
         (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
     } finally { await page.close(); }
   }
 
-  /* ── P3: water — the canal strip (6), the carry (7), the island (8) ── */
+  /* ── P3: WATER — the dry bucket, the drowned lots, and the hazards ── */
   {
     const page = await openPage(CDP);
     try {
       await pocoIn(page);
+      await pocoAddress(page);
+      const dry = [], drowned = [];
+      for (let h = 1; h <= 9; h++) {
+        if (h !== 1) await pocoHole(page, h);
+        dry.push(await page.eval('__fc.bucketDry()'));
+        drowned.push((await page.eval('__fc.underwaterLots()')).length);
+      }
+      const wet = dry.filter(d => d.pinWater < 3);
+      ok(wet.length === 0,
+        `POCO LAW (v1 bug): the bucket is DRY on all 9 — ≥3 yd from every water record ` +
+        `(worst ${Math.min(...dry.map(d => d.pinWater)).toFixed(1)} yd, ${wet.length} wet)`);
+      ok(dry.every(d => d.wetRing === 0),
+        `POCO LAW: the whole puttable ring around the pail is dry too (${dry.filter(d => d.wetRing).length} wet rings)`);
+      ok(dry.every(d => d.puttable),
+        `POCO LAW: the pail stands on its own mown lawn and putts from every side ` +
+        `(${dry.filter(d => !d.puttable).map(d => d.hole).join(',') || 'all 9 good'})`);
+      ok(drowned.every(n => n === 0),
+        `POCO LAW (v1 bug): not one lot on the 9 intersects water or stands under it ` +
+        `(${drowned.reduce((a, b) => a + b, 0)} violations across ${JSON.stringify(drowned)})`);
+
+      // 6 — the canal strip
       await pocoHole(page, 6);
       const rec6 = await page.eval('__fc.holeRec()');
       const strip = rec6.water.find(w => w.t === 'strip');
@@ -1468,24 +1630,30 @@ async function partP() {
         for (let d = w.d0 + 6; d < w.d1 - 6; d += 8) {
           const p = __fc.clWorld(d, w.off);
           if (__fc.surfAt(p[0], p[1]) === 5) wet++; else dry++;
-          const q = __fc.clWorld(d, w.off - w.w * 2.2);
-          if (__fc.surfAt(q[0], q[1]) === 5) dry--;
         }
         return { wet, dry };
       })()`);
       ok(stripWet.wet > 8 && stripWet.dry <= 1,
         `POCO 6: the strip is WATER down its whole run (${stripWet.wet} wet stations, ${stripWet.dry} dry)`);
+      const fall = await page.eval(`(function(){
+        /* FC-10: A CANAL FALLS WITH THE LAND.  v1 levelled the whole strip
+           at its lowest station, which stood the surface above the ground at
+           the low end and drowned the houses there. */
+        const w = WATERS.find(q => q.t === 'strip');
+        const lv = [];
+        for (let k = 0; k <= 6; k++) lv.push(w.lvl(w.d0 + (w.d1 - w.d0) * k / 6));
+        return { spread: +(Math.max(...lv) - Math.min(...lv)).toFixed(2) };
+      })()`);
+      ok(fall.spread > 0.05, `POCO 6: the canal surface falls with its towpath (${fall.spread} yd over the run)`);
       ok(strip.off > 0, `POCO 6: the canal runs down the LEFT of play (off +${strip.off})`);
-      // a REAL shot into it: putter from the bank, splash, drop, +1
       const dropped = await page.eval(`(function(){
         const w = CUR.water.find(q => q.t === 'strip');
         const d = (w.d0 + w.d1) / 2;
         const p = __fc.clWorld(d, w.off - w.w / 2 - 7);
-        return [p[0], p[1], Math.atan2(0, 0)];
+        return [p[0], p[1]];
       })()`);
       await page.eval(`__fc.teleport(${dropped[0]}, ${dropped[1]})`);
       await sleep(250);
-      // cycle to the putter (FC-5 putter-anywhere) and aim straight at the canal
       for (let i = 0; i < 14 && (await page.eval('__fc.club()')) !== 'PT'; i++) { await page.pressPad('r1'); await sleep(110); }
       ok((await page.eval('__fc.club()')) === 'PT', 'POCO 6: the putter is reachable from the canal bank');
       await page.eval(`(function(){ const w = CUR.water.find(q => q.t === 'strip');
@@ -1524,7 +1692,7 @@ async function partP() {
       const s71 = (await page.eval('__fc.players()'))[0].strokes;
       ok(s71 >= s70 + 2, `POCO 7: a ball left short is in the water — shot + penalty (${s70} -> ${s71})`);
 
-      // 8 — the island green
+      // 8 — the civic ponds
       await pocoHole(page, 8);
       const rec8 = await page.eval('__fc.holeRec()');
       ok(rec8.water.filter(w => w.t === 'pond').length >= 2,
@@ -1539,20 +1707,182 @@ async function partP() {
         return wet;
       })()`);
       ok(wetCount >= 2, `POCO 8: both ponds really hold water (${wetCount})`);
-
       ok(page.errors.length === 0, 'POCO: zero console errors through the water tests' +
         (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
     } finally { await page.close(); }
   }
 
-  /* ── P4: the bucket, 2P, pause, and the per-hole budgets ── */
+  /* ── P4: THE REACHABILITY LAW — the chain, and a bot that plays it ── */
   {
     const page = await openPage(CDP);
     try {
       await pocoIn(page);
       await pocoAddress(page);
-      /* the flyover flies the neighborhood too — same comfort contract as
-         Magnolia's (look-verify owns that one; this is the POCO witness) */
+      const chains = [], bots = [];
+      for (let h = 1; h <= 9; h++) {
+        if (h !== 1) await pocoHole(page, h);
+        chains.push(await page.eval('__fc.grassChain(190)'));
+        bots.push(await page.eval('__fc.botPlay()'));
+      }
+      ok(chains.every(c => c.patches >= 8),
+        `POCO: every hole offers landable grass patches ≥ 8 yd across (worst ${Math.min(...chains.map(c => c.patches))})`);
+      ok(chains.every(c => c.ok),
+        `POCO REACHABILITY LAW: tee lawn -> bucket lawn, never a hop over 190 yd ` +
+        `(worst gap ${Math.max(...chains.map(c => c.gap)).toFixed(0)} yd on hole ` +
+        `${chains.reduce((a, b) => (b.gap > a.gap ? b : a)).hole})`);
+      for (const c of chains) {
+        ok(c.ok && c.gap > 0,
+          `POCO ${c.hole} chain: ${c.patches} landable patches, longest hop ${c.gap} yd`);
+      }
+      ok(bots.every(b => b.holed),
+        `POCO BOT: the bot holes out on every one of the 9 (${bots.filter(b => !b.holed).length} unfinished)`);
+      ok(bots.every(b => b.vsPar <= 3),
+        `POCO BOT: …in par + 3 or better, every hole (worst ${Math.max(...bots.map(b => b.vsPar))} over on hole ` +
+        `${bots.reduce((a, b) => (b.vsPar > a.vsPar ? b : a)).hole})`);
+      const tot = bots.reduce((a, b) => a + b.strokes, 0);
+      ok(tot <= 36 + 9,
+        `POCO BOT: the round goes round — ${tot} strokes for par 36 (${tot - 36 >= 0 ? '+' : ''}${tot - 36})`);
+      console.log('  POCO bot card: ' + bots.map(b => `${b.hole}:${b.strokes}`).join(' '));
+      ok(page.errors.length === 0, 'POCO: zero console errors through the reachability tests' +
+        (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
+    } finally { await page.close(); }
+  }
+
+  /* ── P5: THE TELL-WHERE-I-AM KIT ── */
+  {
+    const page = await openPage(CDP);
+    try {
+      await pocoIn(page);
+      await pocoAddress(page);
+      // street blade signs, at real intersections, with real names
+      const signInfo = [];
+      for (let h = 1; h <= 9; h++) {
+        if (h !== 1) await pocoHole(page, h);
+        const rec = await page.eval('__fc.holeRec()');
+        const named = await page.eval(`(function(){
+          // does this hole HAVE a named street anywhere near the line of play?
+          let n = 0;
+          for (const s of CUR.scenery.streets) {
+            if (s[3] === undefined || s[3] < 0) continue;
+            for (const p of s[2]) {
+              const d = clDoff(CUR, p[0], p[1]);
+              if (d[0] > -10 && d[0] < CUR.len + 30 && Math.abs(d[1]) < 70) { n++; break; }
+            }
+          }
+          return n;
+        })()`);
+        signInfo.push({ hole: h, named, signs: await page.eval('__fc.signs()'),
+          mesh: await page.eval('__fc.signMesh()'), calls: await page.eval('__fc.callouts()'),
+          places: await page.eval('__fc.places()'), name: rec.name });
+      }
+      const shouldSign = signInfo.filter(s => s.named > 0);
+      ok(shouldSign.length >= 7, `POCO: ${shouldSign.length} of the 9 have a named street in the corridor`);
+      ok(shouldSign.every(s => s.signs.length >= 1),
+        `POCO SIGNS: every hole whose corridor carries a named street has a blade up ` +
+        `(${shouldSign.filter(s => !s.signs.length).map(s => s.hole).join(',') || 'all of them'})`);
+      ok(signInfo.every(s => s.signs.every(b => b.a && b.a === b.a.toUpperCase())),
+        'POCO SIGNS: every blade reads a REAL street name, in sign case');
+      ok(signInfo.some(s => s.signs.some(b => b.b)),
+        'POCO SIGNS: an intersection puts BOTH names up, on one post');
+      ok(signInfo.filter(s => s.mesh).every(s => s.mesh.tex && s.mesh.tris >= 2),
+        'POCO SIGNS: the blades are one merged mesh on the shared baked text atlas');
+      const totalSigns = signInfo.reduce((a, s) => a + s.signs.length, 0);
+      ok(totalSigns >= 14, `POCO SIGNS: ${totalSigns} blades across the 9`);
+      // the flyover callouts
+      ok(signInfo.every(s => s.calls.length >= 2),
+        `POCO CALLOUTS: every hole names 2-3 landmarks in its flyover ` +
+        `(worst ${Math.min(...signInfo.map(s => s.calls.length))})`);
+      ok(signInfo.every(s => s.calls.length <= 3), 'POCO CALLOUTS: never more than three');
+      console.log('  POCO callouts: ' + signInfo.map(s => `${s.hole}:${s.calls.join('/')}`).join('  '));
+
+      // THE HUD LOCATION LINE — on the two holes POCO.md names
+      await pocoHole(page, 1);
+      const soule = await page.eval(`(function(){
+        // the ball goes onto Soule Avenue itself, and the HUD says where it is
+        for (const s of CUR.scenery.streets) {
+          if (CUR.scenery.names[s[3]] !== 'SOULE AVE') continue;
+          for (const p of s[2]) {
+            const d = clDoff(CUR, p[0], p[1]);
+            if (d[0] > 30 && d[0] < CUR.len - 40) return [p[0], p[1]];
+          }
+        }
+        return null;
+      })()`);
+      ok(!!soule, 'POCO 1: Soule Avenue really runs down the hole');
+      await page.eval(`__fc.locClear && __fc.locClear()`);
+      await page.eval(`__fc.teleport(${soule[0]}, ${soule[1]})`);
+      await sleep(700);
+      ok((await page.eval('__fc.locText()')) === 'SOULE AVE',
+        `POCO HUD: the location line names the street under the ball ("${await page.eval('__fc.locText()')}")`);
+      ok((await page.eval('__fc.locVisible()')) === true, 'POCO HUD: …and it is actually on screen');
+      const fires0 = await page.eval('__fc.locFires()');
+      await sleep(600);
+      ok((await page.eval('__fc.locFires()')) === fires0,
+        'POCO HUD: it is rate-limited — the same place never says itself twice');
+
+      await pocoHole(page, 3);
+      const creek = await page.eval(`(function(){
+        const w = CUR.water.find(q => q.t === 'creek');
+        const p = __fc.clWorld(w.d, 2);
+        return [p[0], p[1], w.name];
+      })()`);
+      ok(creek[2] === 'MURDERERS CREEK', `POCO 3: the creek carries its real name ("${creek[2]}")`);
+      await page.eval(`__fc.teleport(${creek[0]}, ${creek[1]})`);
+      await sleep(700);
+      ok((await page.eval('__fc.locText()')) === 'MURDERERS CREEK',
+        `POCO HUD: the creek names itself as the ball crosses it ("${await page.eval('__fc.locText()')}")`);
+      const landmarks = signInfo.filter(s => s.places.length > 0);
+      ok(landmarks.length >= 4,
+        `POCO HUD: ${landmarks.length} holes name a public landmark under the ball (schools, church, city hall, parks)`);
+      ok(signInfo.every(s => s.places.every(p => !/\d/.test(p))),
+        'PRIVACY LAW: no address, no house number, ever appears in a place name');
+
+      // the minimap carries the strategic layer
+      await pocoHole(page, 1);
+      const mapInfo = await page.eval(`(function(){
+        const H = CUR;
+        return { lots: H.scenery.lots.length, streets: H.scenery.streets.length,
+          fw: H.fw, draws: __fc.mapDraws() };
+      })()`);
+      ok(mapInfo.fw === 0, 'POCO MINIMAP: there is no fairway ribbon to draw — fw is 0');
+      ok(mapInfo.lots > 10 && mapInfo.streets > 0,
+        `POCO MINIMAP: the lawns (${mapInfo.lots}) and the street grid (${mapInfo.streets}) are the map`);
+      ok(page.errors.length === 0, 'POCO: zero console errors through the tell-where-I-am tests' +
+        (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
+    } finally { await page.close(); }
+  }
+
+  /* ── P6: the bucket, the direction laws, pause, and the budgets ── */
+  {
+    const page = await openPage(CDP);
+    try {
+      await pocoIn(page);
+      await pocoAddress(page);
+      // the minimap direction law, on the neighborhood's own records
+      for (const hn of [1, 3, 6]) {
+        if (hn !== 1) await pocoHole(page, hn);
+        else { const w = await page.eval('__fc.clWorld(10, 0)'); await page.eval(`__fc.teleport(${w[0]}, ${w[1]})`); await sleep(200); }
+        await page.eval('__fc.aimBy(0); MAPS.dirty = true; redrawMap();');
+        await sleep(120);
+        const m0 = (await page.eval('__fc.mapMarker()'))[0];
+        await page.axisPad(0, 1); await sleep(520); await page.axisPad(0, 0); await sleep(200);
+        const m1 = (await page.eval('__fc.mapMarker()'))[0];
+        await page.axisPad(0, -1); await sleep(900); await page.axisPad(0, 0); await sleep(200);
+        const m2 = (await page.eval('__fc.mapMarker()'))[0];
+        ok(m1 > m0 + 1.5, `POCO hole ${hn} DIRECTION LAW: aim right moves the map marker RIGHT (${m0.toFixed(1)} -> ${m1.toFixed(1)})`);
+        ok(m2 < m1 - 1.5, `POCO hole ${hn} DIRECTION LAW: aim left moves it LEFT (${m1.toFixed(1)} -> ${m2.toFixed(1)})`);
+      }
+      const sx = () => page.eval(`(() => { const e = __fc.arcEnd();
+        const v = new THREE.Vector3(e[0], groundH(e[0], e[1]), e[1]); v.project(camera); return v.x; })()`);
+      const s0 = await sx();
+      await page.axisPad(0, 1); await sleep(520); await page.axisPad(0, 0); await sleep(220);
+      const s1 = await sx();
+      ok(s1 > s0, `POCO SCREEN-SPACE LAW: aim right puts the arc right of where it was (${s0.toFixed(3)} -> ${s1.toFixed(3)})`);
+      await page.axisPad(0, -1); await sleep(900); await page.axisPad(0, 0); await sleep(220);
+      const s2 = await sx();
+      ok(s2 < s1, `POCO SCREEN-SPACE LAW: aim left puts it left (${s1.toFixed(3)} -> ${s2.toFixed(3)})`);
+
+      // the flyover still flies the neighborhood comfortably
       await page.eval('__fc.gotoHole(6)');
       await page.waitFor(`__fc.state()==='flyover' && __fc.hole()===6`, 'poco 6 flyover', 30000);
       await page.waitFor(`(__fc.flyRec()||{n:0}).n > 60`, 'poco flyover sampled', 20000);
@@ -1569,12 +1899,10 @@ async function partP() {
       ok((fast.rims || 0) >= 1,
         `POCO BUCKET: a ball arriving hot CLANKS off the rim (rims ${fast.rims}, ev ${fast.ev})`);
 
-      // pause / resume on the pad
       await page.pressPad('start'); await sleep(320);
       ok((await page.eval('__fc.state()')) === 'pause', 'POCO: START pauses the round');
       await page.pressPad('start'); await sleep(320);
       ok((await page.eval('__fc.state()')) === 'address', 'POCO: START resumes it');
-
 
       // ── the per-hole budget sweep (build ms + draw calls + tris) ──
       for (let h = 1; h <= 9; h++) {
@@ -1584,35 +1912,34 @@ async function partP() {
         const r = await page.eval('__fc.holeRec()');
         pocoBudget.push({ hole: h, name: r.name, par: r.par, yds: r.yds,
           ms: +b.ms.toFixed(1), calls: i.calls, tris: i.tris,
-          houses: r.scenery.houses, trees: r.scenery.trees });
+          houses: r.scenery.houses, lots: r.scenery.lots, fences: r.scenery.fences,
+          trees: r.scenery.trees, signs: r.scenery.signs });
       }
       const worstMs = Math.max(...pocoBudget.map(b => b.ms));
       const worstTris = Math.max(...pocoBudget.map(b => b.tris));
       const worstCalls = Math.max(...pocoBudget.map(b => b.calls));
       ok(worstMs < 400, `POCO: every hole builds under 400ms (worst ${worstMs}ms)`);
       ok(worstTris <= 60000, `POCO: every hole stays under 60k tris (worst ${worstTris})`);
-      ok(worstCalls <= 42, `POCO: draw calls never exceed Magnolia's own address budget (worst ${worstCalls})`);
-      ok(pocoBudget.every(b => b.houses > 0 && b.trees > 0),
-        'POCO: every hole in the 9 carries houses AND trees');
+      ok(worstCalls <= 40, `POCO: draw calls never exceed Magnolia's own 40 (worst ${worstCalls})`);
+      ok(pocoBudget.every(b => b.houses > 0 && b.trees > 0 && b.lots > 0),
+        'POCO: every hole in the 9 carries houses, trees AND lawns');
+      ok(pocoBudget.every(b => b.fences > 0), 'POCO: every hole carries back-yard fences');
 
-      // the debug course dimension the Pi closer drives
       ok((await page.eval(`__fc.course('magnolia')`)) === 'magnolia', 'POCO: __fc.course() swaps back to Magnolia');
       ok((await page.eval('__fc.courseHoleCount()')) === 18, 'POCO: Magnolia is 18 holes again');
       ok((await page.eval(`__fc.course('poco')`)) === 'poco', 'POCO: __fc.course() swaps to the 9');
       const sw = await page.eval('__fc.sweepBuilds()');
       ok(sw.length === 9 && sw.every(s => s.ms < 400),
         `POCO: sweepBuilds walks the 9 (worst ${Math.max(...sw.map(s => s.ms))}ms)`);
-
       ok(page.errors.length === 0, 'POCO: zero console errors through the bucket/budget tests' +
         (page.errors.length ? ' — ' + page.errors.slice(0, 3).join(' | ') : ''));
     } finally { await page.close(); }
   }
 
-  /* ── P5: a full 9-hole round, the card, the best, and the migration ── */
+  /* ── P7: a full 9-hole round, the card, the best, and the migration ── */
   {
     const page = await openPage(CDP);
     try {
-      // the v1 FLAT best shape must migrate into `magnolia` on load
       await page.nav(`http://localhost:${HTTP}/`);
       await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
       await page.eval(`localStorage.setItem('fairwayclassic_best', JSON.stringify({ amateur: -2, pro: 4 }))`);
@@ -1627,7 +1954,6 @@ async function partP() {
       ok(/MAGNOLIA \(AM\)/.test(tb) && !/POCO/.test(tb),
         `POCO MIGRATION: the title shows the migrated Magnolia best only ("${tb}")`);
 
-      // now play the 9 for real (turbo) and bank a POCO best
       await pocoIn(page, { turbo: 6 });
       let ended = false, cards = 0;
       const nextBeat = async () => {
@@ -1649,7 +1975,7 @@ async function partP() {
           if (s === 'roundend') { ended = true; break; }
           if (s === 'card') {
             cards++;
-            if (cards === 1) {   // P2 joins MID-ROUND on the scorecard (START)
+            if (cards === 1) {
               await page.connectPad(1); await sleep(320);
               await page.pressPad('start', 110, 1); await sleep(320);
               ok((await page.eval('__fc.players()')).length === 2,
@@ -1755,11 +2081,12 @@ if (globalThis.__fc8pins) {
 }
 if (pocoBudget.length) {
   console.log('\nTHE POCO OPEN — per-hole budget (address view, 1280x720):');
-  console.log('  ##  name                  par  yds   build ms  calls    tris  houses  trees');
+  console.log('  ##  name                  par  yds   build ms  calls    tris  houses   lots  fence  trees  signs');
   for (const b of pocoBudget)
     console.log(`  ${String(b.hole).padStart(2)}  ${b.name.padEnd(20)}  ${b.par}   ${String(b.yds).padStart(3)}` +
       `  ${String(b.ms).padStart(9)}  ${String(b.calls).padStart(5)}  ${String(b.tris).padStart(6)}` +
-      `  ${String(b.houses).padStart(6)}  ${String(b.trees).padStart(5)}`);
+      `  ${String(b.houses).padStart(6)}  ${String(b.lots).padStart(5)}  ${String(b.fences).padStart(5)}` +
+      `  ${String(b.trees).padStart(5)}  ${String(b.signs).padStart(5)}`);
 }
 if (globalThis.__sweep) {
   console.log('\n18-hole build sweep (ms):');

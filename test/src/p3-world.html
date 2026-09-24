@@ -298,6 +298,14 @@ const WATERS = [];         // resolved water shapes (world-space test fns)
    nothing for them there. */
 const HOUSES = [];         // {x, z, c, s, a, b, top} oriented boxes: giant bumpers
 const TRAMPS = [];         // {x, z, r} back-yard trampolines (bounce pads)
+/* FC-10 — the two volumes that make a neighborhood play like one.
+   FENCES: back-yard runs, 0.9 yd.  A ball that hits one drops on the side it
+   hit from, which is what turns a lawn hop into a CARRY.
+   CURBS: the kerb line of every street.  A slow ball trying to leave the
+   roadway stalls at the lip and runs the gutter downhill instead. */
+const FENCES = [];         // {ax, az, bx, bz, ux, uz, len, top}
+const CURBS = [];          // {ax, az, bx, bz, nx, nz, len} (n points INTO the street)
+let FENCE_GRID = null, CURB_GRID = null;
 let BUCKET = null;         // the orange pail that replaces the cup on POCO
 let PIN = { x: 0, y: 0, z: 0 };
 let PINFO = null;          // FC-8 pin-sanity record for the current hole
@@ -318,6 +326,9 @@ function disposeHole() {
   WATERS.length = 0;
   HOUSES.length = 0;
   TRAMPS.length = 0;
+  FENCES.length = 0;
+  CURBS.length = 0;
+  FENCE_GRID = null; CURB_GRID = null;
   BUCKET = null;
   flagGrp = null; flagCloth = null; waterShine = null; greenArrows = null;
   treeCaster = null;
@@ -442,17 +453,32 @@ function undField(H, idx) {
 }
 
 /* ═══════════ THE POCO OPEN — the ground the neighborhood claims ═══════════
-   Streets, sidewalks, cart paths, cul-de-sacs, school blacktop, painted
-   courts, diamond hardpan and park lawn are not extra geometry: they are
-   part of the ONE ground field, so the mesh, its colour and the physics
-   lie can never disagree, and they cost zero triangles and zero draw calls.
+   FC-10: THE MAP IS THE PLAYFIELD.  Streets, sidewalks, cart paths,
+   cul-de-sacs, school blacktop, painted courts, diamond hardpan, park lawn
+   and — the new one — every LOT'S OWN LAWN are not extra geometry: they are
+   part of the ONE ground field, so the mesh, its colour and the physics lie
+   can never disagree, and they cost zero triangles and zero draw calls.
 
-   at(x, z) -> 0 none · 1 asphalt · 2 sidewalk · 3 court paint · 4 hardpan
-               · 5 park lawn (turf, fairway speed)
-   Segments are bucketed on a 16-yd grid; regions and discs are few enough
-   to scan.  Hole-local (x, z) IS world space for the live hole.           */
+   at(x, z) -> 0 nothing claims it (SCRUFF) · 1 asphalt · 2 sidewalk
+               · 3 court paint · 4 hardpan · 5 park / field grass
+               · 6 a watered lawn · 7 a summer-dry lawn
+   Highest claim wins, in POCO.md's order: water > diamond sand > pavement >
+   LAWN > park grass > scruff.  (Water and sand are applied by the field
+   itself, above this index.)
+
+   Two out-params ride along with a query, because the colour pass and the
+   curb physics both need more than the code: _giLot is the index of the lot
+   whose lawn was hit (-1 if none) and _giEdge is the signed distance to the
+   nearest street EDGE (negative = out in the roadway), which is what makes
+   a curb a curb.
+   Segments are bucketed on a 16-yd grid; regions, discs and lots are few
+   enough to scan.  Hole-local (x, z) IS world space for the live hole.   */
 const PAVE_CELL = 16;
-function makePaveIndex(H) {
+/* the kerb lip: how far the roadway sits below the lawn beside it.  Small
+   on purpose — it is a lip to trip a dying ball, not a wall. */
+const CURB_LIP = 0.15;
+let _giLot = -1, _giEdge = 1e9;
+function makeGroundIndex(H) {
   const S = H.scenery;
   if (!S) return null;
   const segs = [];
@@ -491,10 +517,23 @@ function makePaveIndex(H) {
   const regions = (S.regions || []).map(g => ({ k: g[0], s: g[1], x: g[2], z: g[3],
     a: g[4], b: g[5], c: Math.cos(g[6]), sn: Math.sin(g[6]), tag: g[7] }));
   const discs = S.discs || [];
-  // what wins where two regions overlap: paint > asphalt > hardpan > lawn
-  const RANK = [0, 3, 0, 4, 2, 1, 0, 0];
+  /* THE LAWNS.  A lot is a rotated rectangle in the BOX frame (the same one
+     boxOut and houseHit use), carrying its watered/dry flag — which is now
+     a lie quality, not just a colour. */
+  const lots = (S.lots || []).map((l, i) => ({ x: l[0], z: l[1], c: Math.cos(l[2]), s: Math.sin(l[2]),
+    a: l[3], b: l[4], dry: l[5], i, rr: (l[3] + 0.5) * (l[3] + 0.5) + (l[4] + 0.5) * (l[4] + 0.5) }));
+  // what wins where two claims overlap (POCO.md's surface priority)
+  const RANK = [0, 6, 5, 7, 4, 1, 3, 2];
   function at(x, z) {
     let best = 0;
+    _giLot = -1; _giEdge = 1e9;
+    for (let i = 0; i < lots.length; i++) {
+      const g = lots[i];
+      const dx = x - g.x, dz = z - g.z;
+      if (dx * dx + dz * dz > g.rr) continue;
+      const u = dx * g.c - dz * g.s, v = dx * g.s + dz * g.c;
+      if (u > -g.a && u < g.a && v > -g.b && v < g.b) { best = g.dry ? 7 : 6; _giLot = i; break; }
+    }
     for (let i = 0; i < regions.length; i++) {
       const g = regions[i];
       const dx = x - g.x, dz = z - g.z;
@@ -503,16 +542,17 @@ function makePaveIndex(H) {
                                : (u < g.a && u > -g.a && v < g.b && v > -g.b);
       if (!inside) continue;
       const code = g.k === 0 ? (g.tag === 'tennis' || g.tag === 'court' ? 3 : 1) : g.k === 1 ? 5 : 4;
-      if (RANK[code] > RANK[best]) best = code;
+      if (RANK[code] > RANK[best]) { best = code; if (code !== 5) _giLot = -1; }
     }
     for (let i = 0; i < discs.length; i++) {
       const dx = x - discs[i][0], dz = z - discs[i][1];
-      if (dx * dx + dz * dz < discs[i][2] * discs[i][2]) return 1;
+      if (dx * dx + dz * dz < discs[i][2] * discs[i][2]) { _giLot = -1; _giEdge = -(discs[i][2] - Math.hypot(dx, dz)); return 1; }
     }
     const ix = Math.floor((x - minX) / PAVE_CELL), iz = Math.floor((z - minZ) / PAVE_CELL);
     if (ix >= 0 && ix < nx && iz >= 0 && iz < nz) {
       const bucket = cells[iz * nx + ix];
       if (bucket) {
+        let street = 0, walk = 0;
         for (let i = 0; i < bucket.length; i++) {
           const s = bucket[i];
           const dx = s.bx - s.ax, dz = s.bz - s.az;
@@ -520,21 +560,87 @@ function makePaveIndex(H) {
           let t = ((x - s.ax) * dx + (z - s.az) * dz) / L2;
           t = t < 0 ? 0 : t > 1 ? 1 : t;
           const qx = s.ax + dx * t, qz = s.az + dz * t;
-          const dd = (x - qx) * (x - qx) + (z - qz) * (z - qz);
-          if (dd < s.hw * s.hw) return 1;
-          if (s.sw && dd < s.r * s.r) return 2;
+          const dd = Math.sqrt((x - qx) * (x - qx) + (z - qz) * (z - qz));
+          const e = dd - s.hw;                       // + = outside this roadway
+          if (e < _giEdge) _giEdge = e;
+          if (e < 0) street = 1;
+          else if (s.sw && dd < s.r) walk = 1;
         }
+        if (street) { _giLot = -1; return best === 3 ? 3 : 1; }
+        if (walk) { _giLot = -1; return best === 3 ? 3 : 2; }
       }
     }
     return best;
   }
-  return { at, regions, discs, segs };
+  return { at, regions, discs, segs, lots,
+    get lot() { return _giLot; }, get edge() { return _giEdge; } };
+}
+
+/* ═══════════ FC-10 — WHERE AM I? ═══════════
+   The one question the whole course is built to answer.  Given a world point
+   on a poco hole, what does the neighborhood call this ground: the water it
+   is in, the public place it stands on, or the street it is crossing.
+   Returns '' when nothing on the map has a name for it (scruff between two
+   blocks is nobody's, and saying so would be noise). */
+function placeNameAt(x, z) {
+  const H = CUR;
+  if (!H || !H.scenery || !FIELD) return '';
+  const S = H.scenery, names = S.names || [];
+  const dof = clDoff(H, x, z);
+  // 1. the water, first — you are IN Murderers Creek, not on Soule Ave
+  for (let i = 0; i < FIELD.wat.length; i++) {
+    const w = FIELD.wat[i];
+    if (!w.name) continue;
+    let e;
+    if (w.t === 'strip') {
+      const dd = dof[0] < w.d0 ? w.d0 - dof[0] : (dof[0] > w.d1 ? dof[0] - w.d1 : 0);
+      e = Math.max(dd, Math.abs(dof[1] - w.off) - w.w / 2);
+    } else if (w.t === 'pond') {
+      const dx = x - w.x, dz = z - w.z;
+      const lx = dx * w.tz - dz * w.tx, lz = dx * w.tx + dz * w.tz;
+      e = (Math.hypot(lx / w.rx, lz / w.rz) - 1) * Math.min(w.rx, w.rz);
+    } else {
+      e = Math.abs(dof[0] - w.d) - w.w / 2;
+    }
+    if (e < 5) return w.name;
+  }
+  // 2. a named public place you are standing on
+  let bestP = '', bestPD = 1e9;
+  for (const p of (S.places || [])) {
+    const d2 = Math.hypot(x - p[0], z - p[1]);
+    if (d2 < p[2] && d2 < bestPD) { bestPD = d2; bestP = names[p[3]] || ''; }
+  }
+  // 3. …or the street you are crossing
+  let bestS = '', bestSD = 1e9;
+  for (const set of [S.streets, S.paths]) {
+    for (const st of set) {
+      if (st[3] === undefined || st[3] < 0) continue;
+      const lim = st[0] / 2 + st[1] + 7;
+      const pts = st[2];
+      for (let i = 1; i < pts.length; i++) {
+        const ax = pts[i - 1][0], az = pts[i - 1][1], bx = pts[i][0], bz = pts[i][1];
+        const ddx = bx - ax, ddz = bz - az;
+        const L2 = ddx * ddx + ddz * ddz || 1;
+        const t = clamp(((x - ax) * ddx + (z - az) * ddz) / L2, 0, 1);
+        const qx = ax + ddx * t, qz = az + ddz * t;
+        const d2 = Math.hypot(x - qx, z - qz);
+        if (d2 < lim && d2 < bestSD) { bestSD = d2; bestS = names[st[3]] || ''; }
+      }
+    }
+  }
+  // standing in the road beats standing in the corner of a big park
+  if (bestS && (bestSD < 6 || !bestP)) return bestS;
+  return bestP || bestS;
 }
 
 /* the whole-hole analytic field: height + surface + color in one pass */
 function makeHoleField(H, idx) {
   const gp = clPoint(H, H.len);
-  const gx = gp[0], gz = gp[1];
+  /* FC-10: the pail stands on a LAWN, and the converter slides that lawn off
+     the end of the centerline when the centerline ends in a pond, on the
+     asphalt or inside somebody's front room.  green.off is that slide. */
+  const gOff = H.green.off || null;
+  const gx = gp[0] + (gOff ? gOff[0] : 0), gz = gp[1] + (gOff ? gOff[1] : 0);
   const g = H.green;
   /* FC-7: the green complex is ANGLED to the approach line (+ang turns its
      long axis to the right of the approach — 12 is the shallow diagonal).
@@ -554,16 +660,28 @@ function makeHoleField(H, idx) {
     const p = clPoint(H, b[0]);
     return { x: w[0], z: w[1], rx: b[2], rz: b[3], tx: p[2], tz: p[3] };
   });
+  const isPocoW = !!H.scenery;
   const wat = H.water.map(w => {
     /* THE POCO OPEN — 'strip': water running PARALLEL to play (the Contra
-       Costa Canal down the left of 6).  Its level is taken at the LOW end
-       of the run it covers, exactly like a pond's. */
+       Costa Canal down the left of 6).
+       FC-10: A CANAL FALLS WITH THE LAND.  v1 levelled the whole strip at
+       the minimum elevation of its run, which stood the surface up to two
+       yards above the ground at the low end — that is what drowned the
+       houses on 6.  The level is taken over a LOCAL window instead (the
+       converter mirrors this exactly when it rejects a lot as underwater).
+       Magnolia has no strips, so this is poco-only by construction. */
     if (w.t === 'strip') {
+      const lvl = d => {
+        const at = clamp(d, w.d0, w.d1);
+        let m = 1e9;
+        for (let k = -2; k <= 2; k++) m = Math.min(m, elevAt(H, clamp(at + k * 14, w.d0, w.d1)));
+        return m - 0.6;
+      };
       let wl = 1e9;
       for (let k = 0; k <= 6; k++) wl = Math.min(wl, elevAt(H, w.d0 + (w.d1 - w.d0) * k / 6));
       const a = clWorld(H, w.d0, w.off), b = clWorld(H, w.d1, w.off);
-      return { t: 'strip', d0: w.d0, d1: w.d1, off: w.off, w: w.w, wl: wl - 0.6,
-        ax: a[0], az: a[1], bx: b[0], bz: b[1] };
+      return { t: 'strip', d0: w.d0, d1: w.d1, off: w.off, w: w.w, wl: wl - 0.6, lvl,
+        name: w.name || '', ax: a[0], az: a[1], bx: b[0], bz: b[1] };
     }
     /* FC-7: on land that now really falls, a pool sits at the LOW end of
        its own footprint — levelling it at the middle station floods the
@@ -571,11 +689,16 @@ function makeHoleField(H, idx) {
     if (w.t === 'pond') {
       const c = clWorld(H, w.d, w.off);
       const p = clPoint(H, w.d);
-      const wl = Math.min(elevAt(H, w.d), elevAt(H, w.d - w.rz), elevAt(H, w.d + w.rz)) - 0.6;
-      return { t: 'pond', x: c[0], z: c[1], rx: w.rx, rz: w.rz, tx: p[2], tz: p[3], wl };
+      /* FC-10 (poco only): a back-yard pool 40 yd off the line sits on
+         CANTED ground, and a level taken from the centerline alone either
+         floods its garden or floats above it. */
+      const cn = isPocoW ? cantAt(H, w.d) * clamp(w.off / 26, -1.7, 1.7) * 26 : 0;
+      const wl = Math.min(elevAt(H, w.d), elevAt(H, w.d - w.rz), elevAt(H, w.d + w.rz)) + cn - 0.6;
+      return { t: 'pond', x: c[0], z: c[1], rx: w.rx, rz: w.rz, tx: p[2], tz: p[3], wl,
+        name: w.name || '' };
     }
     const wl = Math.min(elevAt(H, w.d), elevAt(H, w.d + w.w), elevAt(H, w.d - w.w)) - 0.6;
-    return { t: 'creek', d: w.d, w: w.w, wl };
+    return { t: 'creek', d: w.d, w: w.w, wl, name: w.name || '' };
   });
   for (const w of wat) WATERS.push(w);
   // local green-frame coords of (x,z)
@@ -624,7 +747,7 @@ function makeHoleField(H, idx) {
   });
   const und = undField(H, idx || 0);
   const isPoco = !!H.scenery;
-  const PV = isPoco ? makePaveIndex(H) : null;     // POCO: the built ground
+  const PV = isPoco ? makeGroundIndex(H) : null;   // POCO: the ground as mapped
   /* ═══ FC-7 THE GREEN COMPLEX SURFACE ═══
      plane + multi-lobe contour field + terraces + a false front, in green
      local yards (lat = right of the approach, along = toward the back).
@@ -700,24 +823,42 @@ function makeHoleField(H, idx) {
     }
     let surf = 0;
     if (H.fw > 0 && away < fwH && d > 8 && d < H.len - grz * 0.5) surf = 1;
-    /* THE POCO OPEN: the built ground overrides turf but never the green
-       complex, the sand, the water or the tee pad (all applied below). */
+    /* ═══ THE POCO OPEN — FC-10 GROUND TRUTH ═══
+       No fairway (fw is 0 on every poco hole), no tee box, no fringe.  What
+       the neighborhood has is what you play: pavement, per-lot lawn, park
+       grass, and SCRUFF (the unclaimed dry weeds and ivy) as the default.
+       Region codes 1 / 3 / 6 never appear anywhere on this course. */
     if (PV) {
       const pv = PV.at(x, z);
-      if (pv === 5) surf = 1;              // park lawn plays at fairway speed
-      else if (pv) surf = 7;               // asphalt / walk / paint / hardpan
+      surf = pv === 6 ? 8            // a watered lawn: a clean lie
+           : pv === 7 ? 9            // a dry one: scruffy, and it plays it
+           : pv === 5 ? 10           // park / field / canal verge
+           : pv ? 7                  // asphalt / walk / paint / hardpan
+           : 9;                      // SCRUFF: nobody's ground, playable, slow
+      /* THE CURB.  The roadway sits a lip below its own kerb line and falls
+         another touch into the gutter at the edge, so a ball that gets into
+         the street runs the gutter instead of the crown.  (The lip a slow
+         ball CANNOT climb is enforced by the curb volumes in tickBall — a
+         2.4-yd terrain grid can only draw this, never hold it.) */
+      if (pv === 1) {
+        const e = -PV.edge;                        // how far inside the roadway
+        h -= CURB_LIP + 0.08 * smoothstep((1.6 - e) / 1.6);
+      } else if (pv === 2) h -= CURB_LIP * 0.35;
     }
     if (teeT > 0.002) {
       h = lerp(h, elevAt(H, 0), teeT);
-      if (teeT > 0.6) surf = 6;
+      if (teeT > 0.6 && !isPoco) surf = 6;         // poco tees on a lawn
     }
     // green plateau — likewise a built pad, with its complex on top
     if (rr < 1.15) {
       const plane = greenPlane(_gl[0], _gl[1]);
       h = lerp(h, plane, smoothstep((1.15 - rr) / 0.3));
       const rrT = Math.hypot(_gl[0] / grx, _gl[1] / grz);
-      if (rrT < 1) surf = 2;
-      else if (rrT < 1.3) surf = 3;
+      /* FC-10: on poco the "green" IS the lawn the bucket stands on — mown
+         a shade brighter and putted on normally, with no fringe collar
+         (code 3 is golf-course furniture and this course has none). */
+      if (rrT < (isPoco ? 1.18 : 1)) surf = 2;
+      else if (!isPoco && rrT < 1.3) surf = 3;
     } else if (gMound && rr < 2.1) {
       // FC-7: mounding rings the complex — the collection hollows and humps
       // that make a miss interesting instead of merely long.  The ramps are
@@ -745,7 +886,8 @@ function makeHoleField(H, idx) {
     for (let i = 0; i < wat.length; i++) {
       const m = waterMask(wat[i], x, z, d, off);
       if (m > 0) {
-        h = Math.min(h, lerp(h, wat[i].wl - 1.6, m));
+        const wl = wat[i].lvl ? wat[i].lvl(d) : wat[i].wl;
+        h = Math.min(h, lerp(h, wl - 1.6, m));
         if (m > 0.52) surf = 5;
       }
     }
@@ -770,8 +912,14 @@ let FIELD = null;
 function surfAt(x, z) { return FIELD ? FIELD(x, z)[1] : 0; }
 /* 7 = PAVEMENT (THE POCO OPEN): street asphalt, sidewalk, school blacktop,
    cart path, cul-de-sac, and the diamonds' hardpan.  Full swing, putter
-   allowed, and the ball releases forever — see surfMu/slopeK/restGrad. */
-const SURF_NAMES = ['ROUGH', 'FAIRWAY', 'GREEN', 'FRINGE', 'BUNKER', 'WATER', 'TEE', 'PAVEMENT'];
+   allowed, and the ball releases forever — see surfMu/slopeK/restGrad.
+   FC-10 adds the three surfaces a neighborhood actually has:
+     8 LAWN    somebody's watered front or back yard — a clean lie
+     9 SCRUFF  unclaimed dry weeds, ivy and bare dirt (and a summer-dry
+               lawn, which looks like a lawn and plays like this) — 0.75
+    10 PARK    park, school field, canal verge: broad mown grass          */
+const SURF_NAMES = ['ROUGH', 'FAIRWAY', 'GREEN', 'FRINGE', 'BUNKER', 'WATER', 'TEE', 'PAVEMENT',
+  'LAWN', 'SCRUFF', 'PARK GRASS'];
 
 /* ── colors ── */
 const C_FW_A = col(0x46a038), C_FW_B = col(0x2c7421);
@@ -801,6 +949,23 @@ const C_POOLDECK = col(0xd6d0c2);
 /* the front yards: forty different people's lawns, not one rough */
 const C_YARD_A = col(0x57933a), C_YARD_B = col(0x447a2f);
 const C_YARD_DRY = col(0x9a9750), C_YARD_SH = col(0x33602a);
+/* FC-10 — the three ground truths of a neighborhood.
+   A LAWN is somebody's: every lot gets its own green and its own mow angle
+   (that is what stops the corridor reading as one carpet).  SCRUFF is the
+   ground nobody waters: dry grass, ivy, bare dirt.  CURB is concrete. */
+const C_LAWN1 = col(0x5aa83f), C_LAWN2 = col(0x49973a), C_LAWN3 = col(0x63b04a);
+const C_LAWN4 = col(0x3f8a33), C_LAWN5 = col(0x74b455), C_LAWN6 = col(0x55a04a);
+const LAWN_PAL = [C_LAWN1, C_LAWN2, C_LAWN3, C_LAWN4, C_LAWN5, C_LAWN6];
+const C_DRY1 = col(0x9d9856), C_DRY2 = col(0x87884a), C_DRY3 = col(0xb0a86a);
+/* SCRUFF is not a waste area: it is the ivy, the volunteer grass and the
+   worn dirt of ground nobody mows.  It stays GREEN-ish — a beige sheet
+   across half the corridor reads as a desert, which is the exact opposite
+   of a neighborhood in a wet Californian spring. */
+const C_SCRUF = col(0x63793f), C_SCRUF2 = col(0x7d8547), C_SCRUF3 = col(0x4e6a35);
+const C_DIRT = col(0x86754f);
+const C_CURB = col(0xc6c2b6), C_CURB2 = col(0xa9a599);
+const C_MAT = col(0x25282b), C_MAT2 = col(0x3a3f42);
+const C_PICKET = col(0xe3e0d4), C_STAKE = col(0x8a7554), C_RAIL = col(0x6f5f45);
 
 /* ═══ FC-5 structures kit: yaw-rotated boxes, gable roofs, and the three
    builders (THE clubhouse, white cabins, creek stone bridges).  Merged
@@ -967,6 +1132,255 @@ function panelW(md, cx, cy, cz, w, h, ry, dz, c) {
             a[0], a[1], a[2], c2[0], c2[1], c2[2], d[0], d[1], d[2]);
   for (let k = 0; k < 6; k++) md.c.push(_bc[0], _bc[1], _bc[2]);
 }
+/* ═══════════ FC-10 — THE STREET KIT ═══════════
+   Curbs, fences and the small hard things that stand along a street.  All of
+   it lands in the SAME merged scenery MD as the houses, so the whole kit is
+   still zero extra draw calls; the only new call on the whole course is the
+   street-sign atlas, which has to carry a texture. */
+
+/* the kerb line of every street: a concrete lip, and the sim volume that
+   makes a dying ball stall in the gutter instead of climbing back out */
+function buildCurbs(H, sc) {
+  const S = H.scenery;
+  for (const st of S.streets) {
+    const hw = st[0] / 2, pts = st[2];
+    /* the kerb AND the walk behind it are ONE concrete ribbon, and both are
+       geometry: a 1.6-yd sidewalk sampled on a 2.4-yd terrain grid aliases
+       into pale blobs scattered down the street (measured, on 7). */
+    const CW = 0.45 + (st[1] || 0);
+    for (let i = 1; i < pts.length; i++) {
+      const ax = pts[i - 1][0], az = pts[i - 1][1], bx = pts[i][0], bz = pts[i][1];
+      const L = Math.hypot(bx - ax, bz - az);
+      if (L < 0.6) continue;
+      const ux = (bx - ax) / L, uz = (bz - az) / L;
+      const nx = uz, nz = -ux;
+      for (const side of [-1, 1]) {
+        const ex = ax + nx * side * hw, ez = az + nz * side * hw;
+        const fx = bx + nx * side * hw, fz = bz + nz * side * hw;
+        CURBS.push({ ax: ex, az: ez, bx: fx, bz: fz, ux, uz,
+          nx: -nx * side, nz: -nz * side, len: L });
+        // …and the concrete it is made of, conformed to the ground
+        const n2 = Math.max(1, Math.ceil(L / 7));
+        for (let k = 0; k < n2; k++) {
+          const t0 = k / n2, t1 = (k + 1) / n2;
+          const p0x = ex + (fx - ex) * t0, p0z = ez + (fz - ez) * t0;
+          const p1x = ex + (fx - ex) * t1, p1z = ez + (fz - ez) * t1;
+          const o0x = p0x + nx * side * CW, o0z = p0z + nz * side * CW;
+          const o1x = p1x + nx * side * CW, o1z = p1z + nz * side * CW;
+          const y0 = groundH(o0x, o0z) + 0.02, y1 = groundH(o1x, o1z) + 0.02;
+          if (y0 < -900 || y1 < -900) continue;
+          // the top of the kerb
+          pushTriW(sc, o0x, y0, o0z, p0x, y0, p0z, p1x, y1, p1z, C_CURB, false);
+          pushTriW(sc, o0x, y0, o0z, p1x, y1, p1z, o1x, y1, o1z, C_CURB, false);
+          // …and the face that drops into the roadway
+          const f0 = y0 - CURB_LIP - 0.06, f1 = y1 - CURB_LIP - 0.06;
+          pushTriW(sc, p0x, y0, p0z, p0x, f0, p0z, p1x, f1, p1z, C_CURB2, true);
+          pushTriW(sc, p0x, y0, p0z, p1x, f1, p1z, p1x, y1, p1z, C_CURB2, true);
+        }
+      }
+    }
+  }
+}
+
+/* back-yard fences: white pickets and grape-stake, 0.9 yd.  Cheap on
+   purpose — two faces and a top rail per run — because there are hundreds. */
+function buildFences(H, sc, rng) {
+  const S = H.scenery;
+  const FH = 0.9;
+  for (const f of S.fences || []) {
+    const ax = f[0], az = f[1], bx = f[2], bz = f[3];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 1) continue;
+    const ux = (bx - ax) / L, uz = (bz - az) / L;
+    const picket = rng() < 0.55;
+    const cBase = picket ? C_PICKET : C_STAKE;
+    const n = Math.max(1, Math.ceil(L / 4.5));
+    let any = false;
+    for (let k = 0; k < n; k++) {
+      /* every panel weathers differently, and a post stands between them:
+         an unbroken run of ONE flat colour reads as a slab dropped on the
+         lawn instead of as a fence (measured, on the canal bank of 6). */
+      const j = 0.86 + ((k * 2654435761) >>> 0) % 101 / 101 * 0.26;
+      const cMain = [cBase[0] * j, cBase[1] * j, cBase[2] * j * 0.98];
+      const t0 = k / n, t1 = (k + 1) / n;
+      const p0x = ax + (bx - ax) * t0, p0z = az + (bz - az) * t0;
+      const p1x = ax + (bx - ax) * t1, p1z = az + (bz - az) * t1;
+      const y0 = groundH(p0x, p0z), y1 = groundH(p1x, p1z);
+      if (y0 < -900 || y1 < -900) continue;
+      any = true;
+      // a post every other panel: enough to break the run, half the tris
+      if (!(k & 1)) {
+        boxOut(sc, p0x, y0 + FH * 0.55, p0z, 0.16, FH * 1.15, 0.16,
+          Math.atan2(ux, uz), C_RAIL, true);
+      }
+      // the panel, both faces (MAT_SCENERY is single-sided)
+      pushTriW(sc, p0x, y0, p0z, p1x, y1, p1z, p1x, y1 + FH, p1z, cMain, true);
+      pushTriW(sc, p0x, y0, p0z, p1x, y1 + FH, p1z, p0x, y0 + FH, p0z, cMain, true);
+      pushTriW(sc, p1x, y1, p1z, p0x, y0, p0z, p0x, y0 + FH, p0z, cMain, true);
+      pushTriW(sc, p1x, y1, p1z, p0x, y0 + FH, p0z, p1x, y1 + FH, p1z, cMain, true);
+      // the top rail catches the light and gives the run a line
+      const rx = uz * 0.07, rz = -ux * 0.07;
+      pushTriW(sc, p0x - rx, y0 + FH, p0z - rz, p1x - rx, y1 + FH, p1z - rz,
+        p1x + rx, y1 + FH + 0.02, p1z + rz, C_RAIL, false);
+      pushTriW(sc, p0x - rx, y0 + FH, p0z - rz, p1x + rx, y1 + FH + 0.02, p1z + rz,
+        p0x + rx, y0 + FH + 0.02, p0z + rz, C_RAIL, false);
+    }
+    if (any) {
+      FENCES.push({ ax, az, bx, bz, ux, uz, len: L,
+        top: Math.max(groundH(ax, az), groundH(bx, bz)) + FH });
+    }
+  }
+}
+
+/* the small hard things: mailboxes, driveway hoops, parked cars — and the
+   landmark identity kit (a school's flagpole and backstops, a church's
+   steeple, City Hall's portico) that tells you WHERE you are at a glance */
+const C_CAR = [col(0x9aa3ab), col(0x8c6f5a), col(0x6d7f8c), col(0xb0aca2), col(0x7a8470)];
+const C_HOOP = col(0xdedad0), C_METAL = col(0x8e949a), C_POLE = col(0xd8d6cc);
+const C_FLAGR = col(0xc8443a), C_FLAGW = col(0xf2efe4);
+function buildProps(H, sc, rng) {
+  const S = H.scenery;
+  for (const p of S.props || []) {
+    const k = p[0], x = p[1], z = p[2], ry = p[3], s = p[4] || 1;
+    const y = groundH(x, z);
+    if (y < -900) continue;
+    if (k === 0) {                       // mailbox
+      boxOut(sc, x, y + 0.55, z, 0.14, 1.1, 0.14, ry, C_STAKE, true);
+      boxOut(sc, x, y + 1.25, z, 0.42, 0.34, 0.66, ry, C_METAL, true);
+    } else if (k === 1) {                // driveway hoop
+      boxOut(sc, x, y + 1.5, z, 0.16, 3.0, 0.16, ry, C_METAL, true);
+      boxOut(sc, x + Math.sin(ry) * 0.4, y + 3.1, z + Math.cos(ry) * 0.4, 1.3, 0.95, 0.1, ry, C_HOOP, true);
+      boxOut(sc, x + Math.sin(ry) * 0.75, y + 2.85, z + Math.cos(ry) * 0.75, 0.5, 0.06, 0.5, ry, C_FLAGR, true);
+    } else if (k === 2) {                // a two-box car on the driveway
+      const c = C_CAR[(rng() * C_CAR.length) | 0];
+      boxOut(sc, x, y + 0.62, z, 1.9, 0.86, 4.5, ry, c, true);
+      boxOut(sc, x - Math.sin(ry) * 0.25, y + 1.36, z - Math.cos(ry) * 0.25, 1.7, 0.7, 2.3, ry,
+        [c[0] * 0.8, c[1] * 0.82, c[2] * 0.86], true);
+      for (const [wu, wv] of [[-0.95, 1.5], [0.95, 1.5], [-0.95, -1.5], [0.95, -1.5]]) {
+        boxOut(sc, x + wu * Math.cos(ry) + wv * Math.sin(ry), y + 0.28,
+          z - wu * Math.sin(ry) + wv * Math.cos(ry), 0.26, 0.5, 0.5, ry, C_TRAMPR, true);
+      }
+    } else if (k === 3) {                // the school flagpole
+      trunkW(sc, x, y, z, 0.13 * s, 7.6 * s, C_POLE);
+      const fx = x + Math.sin(ry) * 0.9, fz = z + Math.cos(ry) * 0.9;
+      pushTriW(sc, x, y + 7.2, z, fx, y + 7.0, fz, x, y + 6.3, z, C_FLAGR, false);
+      pushTriW(sc, x, y + 7.2, z, x, y + 6.3, z, fx, y + 7.0, fz, C_FLAGW, false);
+    } else if (k === 4) {                // a ball-field backstop
+      for (let q = -2; q <= 2; q++) {
+        const a = ry + q * 0.34;
+        const px = x + Math.sin(a) * 7, pz = z + Math.cos(a) * 7;
+        const gy = groundH(px, pz);
+        if (gy < -900) continue;
+        boxOut(sc, px, gy + 1.9, pz, 0.2, 3.8, 0.2, a, C_METAL, true);
+        if (q < 2) {
+          const a2 = ry + (q + 1) * 0.34;
+          const qx = x + Math.sin(a2) * 7, qz = z + Math.cos(a2) * 7;
+          const gy2 = groundH(qx, qz);
+          pushTriW(sc, px, gy, pz, qx, gy2, qz, qx, gy2 + 3.8, qz, C_METAL, false);
+          pushTriW(sc, px, gy, pz, qx, gy2 + 3.8, qz, px, gy + 3.8, pz, C_METAL, false);
+        }
+      }
+    } else if (k === 5) {                // City Hall's civic portico
+      for (let q = -2; q <= 2; q++) {
+        const cx2 = x + Math.cos(ry) * q * 2.4 + Math.sin(ry) * 8.2;
+        const cz2 = z - Math.sin(ry) * q * 2.4 + Math.cos(ry) * 8.2;
+        const gy = groundH(cx2, cz2);
+        if (gy < -900) continue;
+        trunkW(sc, cx2, gy, cz2, 0.45, 5.6, C_WALL);
+      }
+      const bx2 = x + Math.sin(ry) * 8.2, bz2 = z + Math.cos(ry) * 8.2;
+      boxOut(sc, bx2, y + 6.1, bz2, 12.6, 1.0, 2.2, ry, C_WALLD, true);
+      gableRoof(sc, bx2, y + 6.6, bz2, 12.6, 2.4, 1.5, ry, C_WALLD, C_WALL);
+    } else if (k === 6) {                // a church steeple, with its cross
+      boxOut(sc, x, y + 7.5, z, 3.0, 15, 3.0, ry, C_WALL, true);
+      coneW(sc, x, y + 15, z, 2.2, 5.2, 4, C_ROOFD, true);
+      boxOut(sc, x, y + 21.6, z, 0.24, 2.4, 0.24, ry, C_CROSS, true);
+      boxOut(sc, x, y + 22.1, z, 1.3, 0.24, 0.24, ry, C_CROSS, true);
+    }
+  }
+}
+
+/* ═══════════ FC-10 — THE STREET BLADE SIGNS ═══════════
+   ONE baked canvas text atlas for the whole course, ONE merged mesh per
+   hole, ONE extra draw call — and the player can read where he is standing
+   from the tee.  The atlas is built once, lazily, from every name any poco
+   hole carries. */
+let SIGN_TEX = null, SIGN_ROWS = null, MAT_SIGN = null;
+const SIGN_ROW_H = 34, SIGN_FONT = 25, SIGN_W = 512;
+function signAtlas() {
+  if (SIGN_TEX || typeof POCO_HOLES === 'undefined') return SIGN_TEX;
+  const names = [];
+  for (const P of POCO_HOLES) for (const s of (P.scenery.names || [])) if (names.indexOf(s) < 0) names.push(s);
+  const rows = Math.max(1, names.length);
+  const cv = document.createElement('canvas');
+  cv.width = SIGN_W;
+  cv.height = Math.pow(2, Math.ceil(Math.log2(Math.max(64, rows * SIGN_ROW_H))));
+  const c = cv.getContext('2d');
+  c.clearRect(0, 0, cv.width, cv.height);
+  c.font = `700 ${SIGN_FONT}px "Avenir Next", "Trebuchet MS", Verdana, sans-serif`;
+  c.textBaseline = 'middle';
+  SIGN_ROWS = {};
+  for (let i = 0; i < names.length; i++) {
+    const y = i * SIGN_ROW_H;
+    const w = Math.min(SIGN_W - 12, c.measureText(names[i]).width + 12);
+    c.fillStyle = '#1f6b45';                       // the blade
+    c.fillRect(0, y + 2, w, SIGN_ROW_H - 4);
+    c.fillStyle = '#f4f2e6';
+    c.fillRect(1.5, y + 3.5, w - 3, SIGN_ROW_H - 7);
+    c.fillStyle = '#1f6b45';
+    c.fillRect(3, y + 5, w - 6, SIGN_ROW_H - 10);
+    c.fillStyle = '#f7f5ea';
+    c.fillText(names[i], 7, y + SIGN_ROW_H / 2);
+    SIGN_ROWS[names[i]] = { u0: 0, u1: w / cv.width, v0: 1 - (y + SIGN_ROW_H) / cv.height,
+      v1: 1 - y / cv.height, w, h: SIGN_ROW_H };
+  }
+  SIGN_TEX = new THREE.CanvasTexture(cv);
+  SIGN_TEX.minFilter = THREE.LinearFilter;
+  SIGN_TEX.magFilter = THREE.LinearFilter;
+  SIGN_TEX.generateMipmaps = false;
+  SIGN_TEX.wrapS = SIGN_TEX.wrapT = THREE.ClampToEdgeWrapping;
+  MAT_SIGN = new THREE.MeshBasicMaterial({ map: SIGN_TEX, transparent: true,
+    alphaTest: 0.4, side: THREE.DoubleSide, depthWrite: true });
+  return SIGN_TEX;
+}
+function buildSigns(H, sc) {
+  const S = H.scenery;
+  if (!S.signs || !S.signs.length) return null;
+  signAtlas();
+  if (!SIGN_ROWS) return null;
+  const g = new THREE.BufferGeometry();
+  const pos = [], uvs = [];
+  const BH = 0.95;                       // blade height, yards
+  for (const sg of S.signs) {
+    const x = sg[0], z = sg[1], ry = sg[2];
+    const y = groundH(x, z);
+    if (y < -900) continue;
+    trunkW(sc, x, y, z, 0.11, 4.1, C_METAL);     // the post rides the free mesh
+    const blades = [[sg[3], ry, 3.5], [sg[4], ry + Math.PI / 2, 3.05]];
+    for (const [ni, ang, hgt] of blades) {
+      if (ni === undefined || ni < 0) continue;
+      const nm = S.names[ni];
+      const row = SIGN_ROWS[nm];
+      if (!row) continue;
+      const w = Math.min(7.5, BH * (row.w / row.h));
+      const ux = Math.cos(ang), uz = -Math.sin(ang);
+      const y0 = y + hgt, y1 = y0 + BH;
+      const ax = x - ux * w * 0.5, az = z - uz * w * 0.5;
+      const bx = x + ux * w * 0.5, bz = z + uz * w * 0.5;
+      pos.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az);
+      uvs.push(row.u0, row.v0, row.u1, row.v0, row.u1, row.v1,
+               row.u0, row.v0, row.u1, row.v1, row.u0, row.v1);
+    }
+  }
+  if (!pos.length) return null;
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  const m = new THREE.Mesh(g, MAT_SIGN);
+  m.matrixAutoUpdate = false;
+  m.updateMatrix();
+  return m;
+}
+
 function buildPocoScenery(H, sc, castMd, rng, pine, blobTree, castCount0) {
   const S = H.scenery;
   if (!S) return 0;
@@ -1060,15 +1474,20 @@ function buildPocoScenery(H, sc, castMd, rng, pine, blobTree, castCount0) {
     else blobTree(t[0], t[1], t[3] * 1.15, C_OAK, C_OAK2);
   }
 
-  /* ── a clipped hedge ring at the green: suburb, not Augusta ── */
-  for (let k = 0; k < 16; k++) {
-    const a = (k / 16 - 0.5) * 2.5 + Math.PI;
-    const rr = Math.max(GREEN.grx, GREEN.grz) + 8 + rng() * 3;
+  /* ── the kerbs, the back-yard fences and the street furniture ── */
+  buildCurbs(H, sc);
+  buildFences(H, sc, rng);
+  buildProps(H, sc, rng);
+
+  /* ── a clipped hedge ring behind the bucket's lawn: suburb, not Augusta ── */
+  for (let k = 0; k < 14; k++) {
+    const a = (k / 14 - 0.5) * 2.2 + Math.PI;
+    const rr = Math.max(GREEN.grx, GREEN.grz) + 5 + rng() * 2.5;
     const px = GREEN.x + (GREEN.tx * Math.cos(a) - GREEN.tz * Math.sin(a)) * rr;
     const pz = GREEN.z + (GREEN.tz * Math.cos(a) + GREEN.tx * Math.sin(a)) * rr;
     const sf = FIELD(px, pz)[1];
-    if (sf === 5 || sf === 4 || sf === 2 || sf === 3 || sf === 7) continue;
-    moundW(sc, px, groundH(px, pz) - 0.3, pz, 1.2 + rng() * 0.8, 0.7, C_BOXWOOD, rng, true);
+    if (sf === 5 || sf === 4 || sf === 2 || sf === 7) continue;
+    moundW(sc, px, groundH(px, pz) - 0.3, pz, 1.1 + rng() * 0.7, 0.7, C_BOXWOOD, rng, true);
   }
 
   /* ── the backdrop: low rooftops and a tree line, never a pine wall ── */
@@ -1095,7 +1514,7 @@ function buildPocoScenery(H, sc, castMd, rng, pine, blobTree, castCount0) {
     if (i % 3) continue;
     const t = S.trees[i];
     const dof = clDoff(H, t[0], t[1]);
-    if (Math.abs(dof[1]) > H.fw + 24 || dof[0] < 0 || dof[0] > H.len) continue;
+    if (Math.abs(dof[1]) > 32 || dof[0] < 0 || dof[0] > H.len) continue;
     const y = groundH(t[0], t[1]);
     if (y < -900) continue;
     coneW(castMd, t[0], y + 2.2, t[1], 2.7 * t[3], 5.2 * t[3], 4, C_PINE, true);
@@ -1103,6 +1522,39 @@ function buildPocoScenery(H, sc, castMd, rng, pine, blobTree, castCount0) {
   }
   void castCount0;
   return cast;
+}
+
+/* a uniform-grid broadphase over line segments (fences, kerbs).  Built once
+   per hole; queried by tickBall, which may not scan hundreds of segments. */
+const SEG_CELL = 14;
+function segGrid(list) {
+  if (!list.length) return null;
+  let minX = 1e9, minZ = 1e9, maxX = -1e9, maxZ = -1e9;
+  for (const s of list) {
+    minX = Math.min(minX, s.ax, s.bx); maxX = Math.max(maxX, s.ax, s.bx);
+    minZ = Math.min(minZ, s.az, s.bz); maxZ = Math.max(maxZ, s.az, s.bz);
+  }
+  const nx = Math.max(1, Math.ceil((maxX - minX) / SEG_CELL));
+  const nz = Math.max(1, Math.ceil((maxZ - minZ) / SEG_CELL));
+  const cells = new Array(nx * nz);
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    const i0 = clamp(Math.floor((Math.min(s.ax, s.bx) - 1 - minX) / SEG_CELL), 0, nx - 1);
+    const i1 = clamp(Math.floor((Math.max(s.ax, s.bx) + 1 - minX) / SEG_CELL), 0, nx - 1);
+    const j0 = clamp(Math.floor((Math.min(s.az, s.bz) - 1 - minZ) / SEG_CELL), 0, nz - 1);
+    const j1 = clamp(Math.floor((Math.max(s.az, s.bz) + 1 - minZ) / SEG_CELL), 0, nz - 1);
+    for (let j = j0; j <= j1; j++) for (let k = i0; k <= i1; k++) {
+      const c = j * nx + k;
+      (cells[c] || (cells[c] = [])).push(s);
+    }
+  }
+  return {
+    near(x, z) {
+      const ix = Math.floor((x - minX) / SEG_CELL), iz = Math.floor((z - minZ) / SEG_CELL);
+      if (ix < 0 || ix >= nx || iz < 0 || iz >= nz) return null;
+      return cells[iz * nx + ix] || null;
+    },
+  };
 }
 
 /* ── the hole builder — fires only at hole transitions ── */
@@ -1160,9 +1612,10 @@ function buildHole(idx) {
      captured per build — groundH closes over it, so the physics and the
      mesh can never read different resolutions. */
   const poco = COURSE === 'poco';
+  const COR = poco ? (H.cor || 52) : 0;
   const STEP = poco ? 2.4 : GRID_STEP;
-  const CLIP_IN = poco ? 68 : 72, CLIP_OUT = poco ? 72 : 78;
-  const PADS = poco ? 52 : 74, PADT = poco ? 26 : 30;
+  const CLIP_IN = poco ? COR + 14 : 72, CLIP_OUT = poco ? COR + 18 : 78;
+  const PADS = poco ? COR : 74, PADT = poco ? 26 : 30;
   const x0 = minX - PADS, z0 = minZ - PADT, x1 = maxX + PADS, z1 = maxZ + PADS;
   const nx = Math.ceil((x1 - x0) / STEP), nz = Math.ceil((z1 - z0) / STEP);
   const HF = new Float32Array((nx + 1) * (nz + 1));
@@ -1215,6 +1668,44 @@ function buildHole(idx) {
           break;
         }
         case 5: c = C_MUD; break;
+        /* ── FC-10: the neighborhood's own three grounds ── */
+        case 8: {
+          /* A LAWN IS SOMEBODY'S.  Each lot draws from its own palette slot
+             and mows at its own angle, so forty yards of front gardens read
+             as forty gardens and not as one enormous fairway. */
+          const li = FIELD.pave ? (FIELD.pave.at(x, z), FIELD.pave.lot) : -1;
+          const seed = li < 0 ? 0 : li;
+          const base = LAWN_PAL[seed % LAWN_PAL.length];
+          const ang = ((seed * 2654435761) % 4) * 0.42;
+          const mx = x * Math.cos(ang) + z * Math.sin(ang);
+          const stripe = (Math.floor(mx / 2.6) % 2) ? 1.06 : 0.94;
+          c = [base[0] * stripe * (0.96 + n * 0.08), base[1] * stripe * (0.96 + n * 0.08),
+               base[2] * stripe * (0.96 + n * 0.08)];
+          break;
+        }
+        case 9: {
+          /* SCRUFF — the ground nobody waters.  Dry grass going to seed,
+             ivy in the shade, bare dirt where the kids cut through. */
+          const t = vnoise(x * 0.09 + 11, z * 0.09 - 7) * 0.5 + 0.5;
+          const li2 = FIELD.pave ? (FIELD.pave.at(x, z), FIELD.pave.lot) : -1;
+          if (li2 >= 0) {          // a summer-dry LAWN still reads as a lawn
+            c = mix3(C_DRY2, C_DRY1, t, [0, 0, 0]);
+            mix3(c, C_DRY3, smoothstep((t - 0.62) / 0.3) * 0.7, c);
+          } else {
+            c = mix3(C_SCRUF3, C_SCRUF, t, [0, 0, 0]);
+            mix3(c, C_SCRUF2, smoothstep((t - 0.58) / 0.34) * 0.8, c);
+            mix3(c, C_DIRT, smoothstep((t - 0.84) / 0.16) * 0.55, c);
+          }
+          c = [c[0] * (0.94 + n * 0.12), c[1] * (0.94 + n * 0.12), c[2] * (0.94 + n * 0.12)];
+          break;
+        }
+        case 10: {
+          // park / school field / canal verge: broad mown municipal grass
+          const ub2 = FIELD.und(d, dof[1]) * 3.4;
+          c = (Math.floor((x * 0.7 + z * 0.71 + ub2) / 13) % 2) ? C_LAWN_A : C_LAWN_B;
+          c = [c[0] * (0.95 + n * 0.1), c[1] * (0.95 + n * 0.1), c[2] * (0.95 + n * 0.1)];
+          break;
+        }
         case 7: {
           /* THE POCO OPEN — the built ground reads its own material: worn
              asphalt (with a lane-crown sheen), pale concrete walk, painted
@@ -1230,22 +1721,10 @@ function buildHole(idx) {
           break;
         }
         default: {
-          if (poco) {
-            /* THE YARDS.  Augusta's rough is one colour because Augusta is
-               one lawn; a neighborhood is forty lawns, each mown and watered
-               by a different person.  Broad seeded patches (~18 yd) swing
-               between a watered green and a summer-dry straw, so the corridor
-               stops reading as one enormous fairway and the short grass pops
-               out of it. */
-            const lot = vnoise(x * 0.055 + 31, z * 0.055 - 17) * 0.5 + 0.5;
-            c = mix3(C_YARD_B, C_YARD_A, lot, [0, 0, 0]);
-            mix3(c, C_YARD_DRY, smoothstep((lot - 0.66) / 0.26) * 0.75, c);
-            mix3(c, C_YARD_SH, smoothstep((0.3 - lot) / 0.26) * 0.5, c);
-            c = [c[0] * (0.94 + n * 0.12), c[1] * (0.94 + n * 0.12), c[2] * (0.94 + n * 0.12)];
-            const cut0 = clamp(1 - (away - fwAt(H, d)) / 4.5, 0, 1);
-            if (cut0 > 0.01) c = [c[0] * (1 - 0.22 * cut0), c[1] * (1 - 0.16 * cut0), c[2] * (1 - 0.24 * cut0)];
-            break;
-          }
+          /* (Magnolia's rough.  FC-10 retired poco's "forty yards of noise"
+             yard colour: a lawn is a LOT now, drawn by case 8 from the
+             converter's own lot rectangles, and the ground between lots is
+             SCRUFF — case 9 — not rough.) */
           // pine straw lives under the tree lines, not beside the fairway
           const strawT = smoothstep((away - H.fw - 24) / 26);
           c = mix3(n > 0.5 ? C_ROUGH : C_ROUGH2, C_STRAW, strawT * (0.45 + n * 0.4), [0, 0, 0]);
@@ -1275,7 +1754,8 @@ function buildHole(idx) {
      (that is where the player is reading the land), off entirely on water. */
   {
     const aoCool = [0.24, 0.32, 0.5];   // cool shade tint
-    const ASP = [0.46, 0.68, 0.26, 0.54, 0.14, 0, 0.5, 0.3];   // by surface code (7 = pavement)
+    // by surface code (7 pavement · 8 lawn · 9 scruff · 10 park grass)
+    const ASP = [0.46, 0.68, 0.26, 0.54, 0.14, 0, 0.5, 0.3, 0.6, 0.42, 0.62];
     const inv2 = 1 / (2 * STEP);
     for (let iz = 1; iz < nz; iz++) {
       for (let ix = 1; ix < nx; ix++) {
@@ -1356,9 +1836,11 @@ function buildHole(idx) {
         const cx = x0 + (ix + 0.5) * STEP, cz = z0 + (iz + 0.5) * STEP;
         const s = FIELD(cx, cz);
         if (s[1] !== 5) continue;
-        // which shape's level?
+        // which shape's level?  (FC-10: a strip's level FALLS with its run,
+        // so the canal is asked for its level HERE, not once for the hole)
+        const dof2 = clDoff(H, cx, cz);
         let wl = -1e9;
-        for (const w of FIELD.wat) wl = Math.max(wl, w.wl);
+        for (const w of FIELD.wat) wl = Math.max(wl, w.lvl ? w.lvl(dof2[0]) : w.wl);
         const ax = x0 + ix * STEP, az = z0 + iz * STEP;
         const bx = ax + STEP, bz = az + STEP;
         const n = vnoise(cx * 0.4, cz * 0.4) * 0.5 + 0.5;
@@ -1449,6 +1931,15 @@ function buildHole(idx) {
      layer costs ZERO extra draw calls.  Magnolia is untouched. */
   if (COURSE === 'poco') {
     castCount += buildPocoScenery(H, sc, castMd, rng, pine, blobTree, castCount);
+    /* the street blades are the one textured thing on the course: ONE merged
+       mesh on ONE shared atlas material = one draw call for the whole hole */
+    const sgm = buildSigns(H, sc);
+    if (sgm) { scene.add(sgm); HOLE_OBJS.push(sgm); }
+    /* …and the two new sim volumes get their broadphase.  A rolling ball
+       asks "is there a fence or a kerb near me?" sixty times a second, and
+       a linear scan of 300 segments is not an answer. */
+    FENCE_GRID = segGrid(FENCES);
+    CURB_GRID = segGrid(CURBS);
   } else {
     // deciduous accents mixed into the flanks: variety by hole palette
     const decidA = H.magnolia ? C_OAK : H.peach ? C_PEACH : H.redbud ? C_REDBUD : C_OAK;
@@ -1630,8 +2121,13 @@ function buildHole(idx) {
     buildings.castShadow = LOOK;
     scene.add(buildings); HOLE_OBJS.push(buildings);
   }
-  const scenery = mdMesh(sc, MAT_SCENERY);
-  scene.add(scenery); HOLE_OBJS.push(scenery);
+  /* the merged scenery mesh — on poco it is emitted LATER (the bucket, the
+     doormat and the tee markers join it, which is how the street-sign atlas
+     pays for its own draw call) */
+  if (COURSE !== 'poco') {
+    const scenery = mdMesh(sc, MAT_SCENERY);
+    scene.add(scenery); HOLE_OBJS.push(scenery);
+  }
   // the curated tree-caster mesh (depth-only; the color pass writes nothing)
   if (LOOK && castMd.p.length) {
     const cg = new THREE.BufferGeometry();
@@ -1710,12 +2206,49 @@ function buildHole(idx) {
     }
     return g;
   }
+  /* ═══ FC-10 — THE BUCKET MUST BE DRY ═══
+     v1 shipped the pail on 9 standing IN the pool.  Pin validation now
+     extends to EVERY water record on the hole — scenery pools, the canal
+     strip, the civic ponds, the creeks — and the whole puttable ring around
+     the cup has to be dry too, not merely the cup itself. */
+  const PIN_WATER = 3.0;
+  function waterDist(wx, wz) {
+    let m = 99;
+    const dof = clDoff(H, wx, wz);
+    for (let i = 0; i < FIELD.wat.length; i++) {
+      const w = FIELD.wat[i];
+      let e;
+      if (w.t === 'strip') {
+        const dd = dof[0] < w.d0 ? w.d0 - dof[0] : (dof[0] > w.d1 ? dof[0] - w.d1 : 0);
+        e = Math.max(dd, Math.abs(dof[1] - w.off) - w.w / 2);
+      } else if (w.t === 'pond') {
+        const dx = wx - w.x, dz = wz - w.z;
+        const lx = dx * w.tz - dz * w.tx, lz = dx * w.tx + dz * w.tz;
+        e = (Math.hypot(lx / w.rx, lz / w.rz) - 1) * Math.min(w.rx, w.rz);
+      } else {
+        e = Math.abs(dof[0] - w.d) - w.w / 2;
+      }
+      if (e < m) m = e;
+    }
+    return m;
+  }
+  function ringDry(wx, wz) {
+    if (waterDist(wx, wz) < PIN_WATER) return false;
+    for (let a = 0; a < 8; a++) {
+      const th = TAU * a / 8;
+      const px = wx + Math.cos(th) * 2.2, pz = wz + Math.sin(th) * 2.2;
+      if (waterDist(px, pz) < 1.2 || surfRaw(px, pz) === 5) return false;
+    }
+    return true;
+  }
+  const surfRaw = (wx, wz) => FIELD(wx, wz)[1];
   function pinScore(lx, lz, relax) {
     const ed = edgeDist(lx, lz);
     if (ed < (relax > 1 ? 1.6 : PIN_EDGE)) return null;
     const w = gW(lx, lz);
     const sd = sandDist(w[0], w[1]);
     if (sd < (relax > 1 ? 1.2 : PIN_SAND)) return null;
+    if (COURSE === 'poco' && !ringDry(w[0], w[1])) return null;
     const pg = gradAt(w[0], w[1]), rg = ringGrad(w[0], w[1]);
     if (!relax && (pg > PIN_PT || rg > PIN_RING)) return null;
     if (relax === 1 && rg > 0.16) return null;
@@ -1767,7 +2300,22 @@ function buildHole(idx) {
     }
     if (relax === 2) {   // nothing legal anywhere: the centre is the floor
       pox = 0; poz = 0;
-      const w = gW(0, 0);
+      /* …unless this is POCO, where the floor may be a swimming pool.  The
+         pail goes to the DRIEST ground on the lawn instead — there is no
+         legal-but-wet on a course whose greens are people's gardens. */
+      if (COURSE === 'poco') {
+        let bd = -1e9;
+        for (let ri = 0; ri <= 6; ri++) {
+          for (let a = 0; a < 12; a++) {
+            const th = TAU * a / 12 + ri * 0.21;
+            const lx = Math.cos(th) * ri * (GREEN.grx / 7), lz = Math.sin(th) * ri * (GREEN.grz / 7);
+            const w2 = gW(lx, lz);
+            const dd = waterDist(w2[0], w2[1]) - Math.hypot(lx, lz) * 0.15;
+            if (dd > bd) { bd = dd; pox = lx; poz = lz; }
+          }
+        }
+      }
+      const w = gW(pox, poz);
       PINFO = { hole: H.n, lat: 0, along: 0, handSet: !!pref, pref: pref ? pref.slice() : null,
         moved: pref ? Math.hypot(pref[0], pref[1]) : 0,
         edge: +edgeDist(0, 0).toFixed(2), sand: +sandDist(w[0], w[1]).toFixed(2),
@@ -1817,10 +2365,30 @@ function buildHole(idx) {
       for (let k = 0; k < 3; k++) pm.c.push(0.06, 0.08, 0.06);
     }
   }
+  /* ═══ THE DOORMAT (POCO) ═══ there is no tee box on this course: you hit
+     off a rubber mat somebody dropped on the tee lawn.  Two white markers
+     beside it, as small as the ones on a driving range. */
+  if (COURSE === 'poco') {
+    const mt = H.scenery.mat || [0, 4, 0];
+    const mry = mt[2] || 0;
+    const MW = 2.4, ML = 1.45;
+    const cR = Math.cos(mry), sR = Math.sin(mry);
+    const MP = (u, v) => [mt[0] + u * cR + v * sR, mt[1] - u * sR + v * cR];
+    const c0 = MP(-MW, -ML), c1 = MP(MW, -ML), c2 = MP(MW, ML), c3 = MP(-MW, ML);
+    const my = groundH(mt[0], mt[1]) + 0.07;
+    pushTriW(pm, c0[0], my, c0[1], c2[0], my, c2[1], c1[0], my, c1[1], C_MAT, false);
+    pushTriW(pm, c0[0], my, c0[1], c3[0], my, c3[1], c2[0], my, c2[1], C_MAT, false);
+    // the worn lighter strip a thousand swings leave down the middle
+    const s0 = MP(-MW * 0.55, -ML * 0.8), s1 = MP(MW * 0.55, -ML * 0.8);
+    const s2 = MP(MW * 0.55, ML * 0.8), s3 = MP(-MW * 0.55, ML * 0.8);
+    pushTriW(pm, s0[0], my + 0.02, s0[1], s2[0], my + 0.02, s2[1], s1[0], my + 0.02, s1[1], C_MAT2, false);
+    pushTriW(pm, s0[0], my + 0.02, s0[1], s3[0], my + 0.02, s3[1], s2[0], my + 0.02, s2[1], C_MAT2, false);
+  }
   // tee markers: two white spheres-ish boxes at the tee
-  const tw = clWorld(H, 2, 0);
+  const tw = (COURSE === 'poco' && H.scenery.mat)
+    ? [H.scenery.mat[0], H.scenery.mat[1]] : clWorld(H, 2, 0);
   const teeY = groundH(tw[0], tw[1]);
-  for (const s of [-6.5, 6.5]) {
+  for (const s of (COURSE === 'poco' ? [-2.6, 2.6] : [-6.5, 6.5])) {
     const mx = tw[0] + s, mz = tw[1];
     for (let q = 0; q < 4; q++) {
       const a0 = TAU * q / 4, a1 = TAU * (q + 1) / 4;
@@ -1830,8 +2398,18 @@ function buildHole(idx) {
       for (let k = 0; k < 3; k++) pm.c.push(0.95, 0.94, 0.86);
     }
   }
-  const props = mdMesh(pm, MAT_PROPS);
-  scene.add(props); HOLE_OBJS.push(props);
+  /* FC-10 budget: the street-blade atlas costs poco one draw call, so the
+     props (bucket, doormat, markers) ride the scenery mesh here instead of
+     carrying a second identical material of their own.  Net: no change. */
+  if (COURSE === 'poco') {
+    for (let i = 0; i < pm.p.length; i++) sc.p.push(pm.p[i]);
+    for (let i = 0; i < pm.c.length; i++) sc.c.push(pm.c[i]);
+    const scenery = mdMesh(sc, MAT_SCENERY);
+    scene.add(scenery); HOLE_OBJS.push(scenery);
+  } else {
+    const props = mdMesh(pm, MAT_PROPS);
+    scene.add(props); HOLE_OBJS.push(props);
+  }
   // flag: pole + yellow cloth (cloth flutters via its group); both CAST.
   // POCO has no flagstick — the bucket IS the hole (flagGrp stays null, and
   // every flag consumer is already null-guarded).
@@ -2400,7 +2978,10 @@ function tickMapZoom(dt) {
 }
 const MAP_COLS = { rough: '#1d4520', fw: '#4da03e', fringe: '#3c8a34', green: '#63c353',
   tee: '#4da03e', sand: '#ecdfb2', water: '#2b6a9a', pin: '#f2f0e8',
-  street: '#8d9089', house: '#b6a68c' };
+  street: '#8d9089', house: '#b6a68c',
+  /* FC-10: the strategic layer — every patch of landable grass, lighter
+     than the scruff it sits in, because the chain of lawns IS the hole */
+  scruff: '#3c4426', lawn: '#59a93f', lawnDry: '#8f8b4a', park: '#4e9c3c', mat: '#2a2d30' };
 function bakeMap(H) {
   if (!mapCtx) return;
   // frame: tee at (0,0); overall direction = tee→green
@@ -2424,7 +3005,7 @@ function drawMapBase(H) {
   const P = (x, z) => mapXY(x, z);
   // rough panel
   c.clearRect(0, 0, W2, H2);
-  c.fillStyle = MAP_COLS.rough;
+  c.fillStyle = H.scenery ? MAP_COLS.scruff : MAP_COLS.rough;
   c.beginPath();
   if (c.roundRect) c.roundRect(0, 0, W2, H2, 6); else c.rect(0, 0, W2, H2);
   c.fill();
@@ -2454,6 +3035,36 @@ function drawMapBase(H) {
      polylines straight off the scenery record (the minimap is the only
      place the neighborhood is drawn as lines rather than as ground) */
   if (H.scenery) {
+    /* FC-10: THE LANDABLE GRASS, first — the lawns and the park lawns the
+       player plans his chain of hops across.  Lighter than the ground
+       around them; a dry lot reads straw, because a dry lot plays scruffy. */
+    for (const l of (H.scenery.lots || [])) {
+      const m = P(l[0], l[1]);
+      // the lot's DEPTH axis in world is (sin rot, cos rot) — same frame the
+      // ellipse helper below takes its tangent in
+      const tx = Math.sin(l[2]), tz = Math.cos(l[2]);
+      const sx3 = tz * MAPS.ux - tx * MAPS.uz;
+      const sy3 = -(tx * MAPS.ux + tz * MAPS.uz);
+      const a2 = Math.max(1.5, l[3] * MAPS.s), b2 = Math.max(1.5, l[4] * MAPS.s);
+      c.save();
+      c.translate(m[0], m[1]);
+      c.rotate(Math.atan2(sy3, sx3) + Math.PI / 2);
+      c.fillStyle = l[5] ? MAP_COLS.lawnDry : MAP_COLS.lawn;
+      c.fillRect(-a2, -b2, a2 * 2, b2 * 2);
+      c.restore();
+    }
+    for (const g of (H.scenery.regions || [])) {
+      if (g[0] !== 1) continue;                      // turf: park, field, verge
+      const m = P(g[2], g[3]);
+      c.fillStyle = MAP_COLS.park;
+      c.save();
+      c.translate(m[0], m[1]);
+      c.beginPath();
+      if (g[1] === 0) c.ellipse(0, 0, Math.max(2, g[4] * MAPS.s), Math.max(2, g[5] * MAPS.s), 0, 0, TAU);
+      else c.rect(-g[4] * MAPS.s, -g[5] * MAPS.s, g[4] * 2 * MAPS.s, g[5] * 2 * MAPS.s);
+      c.fill();
+      c.restore();
+    }
     c.lineCap = 'round'; c.lineJoin = 'round';
     for (const set of [H.scenery.streets, H.scenery.paths, H.scenery.drives || []]) {
       for (const s of set) {
@@ -2490,8 +3101,9 @@ function drawMapBase(H) {
     c.fill();
     c.restore();
   };
-  // green + fringe (fringe ring first, then green)
-  ell(GREEN.x, GREEN.z, GREEN.grx + 4, GREEN.grz + 4, GREEN.tx, GREEN.tz, MAP_COLS.fringe);
+  // green + fringe (fringe ring first, then green).  POCO has no fringe:
+  // the pail's lawn simply reads brighter than the lawns around it.
+  if (!H.scenery) ell(GREEN.x, GREEN.z, GREEN.grx + 4, GREEN.grz + 4, GREEN.tx, GREEN.tz, MAP_COLS.fringe);
   ell(GREEN.x, GREEN.z, GREEN.grx, GREEN.grz, GREEN.tx, GREEN.tz, MAP_COLS.green);
   // water first (creeks under bunker edges), then bunkers
   for (const w of FIELD.wat) {
@@ -2516,15 +3128,16 @@ function drawMapBase(H) {
     }
   }
   for (const b of FIELD.bunk) ell(b.x, b.z, b.rx, b.rz, b.tx, b.tz, MAP_COLS.sand);
-  // tee box
+  // the tee — a box on Magnolia, a doormat on somebody's lawn on POCO
   {
-    const t = clWorld(H, 3, 0);
+    const t = H.scenery && H.scenery.mat ? H.scenery.mat : clWorld(H, 3, 0);
     const m = P(t[0], t[1]);
-    c.fillStyle = MAP_COLS.tee;
-    c.fillRect(m[0] - 7, m[1] - 3, 14, 6);
+    const w3 = H.scenery ? 5 : 7, h3 = H.scenery ? 2.5 : 3;
+    c.fillStyle = H.scenery ? MAP_COLS.mat : MAP_COLS.tee;
+    c.fillRect(m[0] - w3, m[1] - h3, w3 * 2, h3 * 2);
     c.strokeStyle = 'rgba(242,240,232,0.7)';
     c.lineWidth = 1;
-    c.strokeRect(m[0] - 7, m[1] - 3, 14, 6);
+    c.strokeRect(m[0] - w3, m[1] - h3, w3 * 2, h3 * 2);
   }
   // FC-5 green zoom: slope arrows on the map (downhill, white→red by grade)
   if (MAPS.mode === 'green') {

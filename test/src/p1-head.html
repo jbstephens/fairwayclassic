@@ -102,6 +102,26 @@ body.tp-on #hintLine { bottom: 238px; }
   margin-top: 8px; font-size: 27px; color: #f2efe2;
   text-shadow: 0 2px 0 rgba(10, 30, 15, 0.85);
 }
+/* FC-10 — TELL ME WHERE I AM.
+   #locLine names the street, landmark or water the ball is crossing, in the
+   quiet top-centre of the frame; #callouts floats the two or three names a
+   hole is a tour of over the world itself during the flyover. */
+#locLine {
+  position: absolute; left: 50%; top: 74px; transform: translateX(-50%);
+  font-size: 23px; font-weight: 800; letter-spacing: 3px; color: #ffe9a8;
+  text-shadow: 0 2px 0 rgba(8,26,14,0.9), 0 0 14px rgba(0,0,0,0.5);
+  white-space: nowrap; opacity: 0; transition: opacity 0.35s linear;
+  pointer-events: none;
+}
+#callouts { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#callouts .co {
+  position: absolute; transform: translate(-50%, -50%);
+  font-family: Georgia, serif; font-size: 27px; letter-spacing: 2px;
+  color: #fff7dd; text-shadow: 0 2px 0 rgba(8,26,14,0.95), 0 0 18px rgba(0,0,0,0.55);
+  white-space: nowrap; padding: 4px 12px;
+  border-left: 3px solid rgba(255,215,94,0.9);
+  background: rgba(6, 26, 14, 0.42);
+}
 /* FC-7: the shot panel can carry a second (sidehill) line, so the hint
    sits above the panel's tallest form instead of colliding with it */
 #hintLine {
@@ -196,6 +216,8 @@ body.tp-on #hintLine { bottom: 238px; }
       <div id="meterBar"><div id="meterZones"></div><div id="meterFill"></div></div>
     </div>
   </div>
+  <div id="locLine"></div>
+  <div id="callouts"></div>
   <div id="banner"><div id="bannerMain"></div><div id="bannerSub"></div></div>
   <div id="hintLine"></div>
   <div id="titleUI" class="screen">

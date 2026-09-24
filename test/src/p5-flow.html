@@ -175,6 +175,81 @@ function refreshWind() {
 }
 function hudVisible(v) { hudEl.style.display = v ? 'block' : 'none'; }
 
+/* ═══════════ FC-10 — THE LOCATION LINE ═══════════
+   The ball crosses SOULE AVE, drops into MURDERERS CREEK, runs out onto the
+   SEQUOIA ELEMENTARY SCHOOL blacktop — and the HUD says so, once, quietly.
+   Rate-limited hard: it speaks only when the name CHANGES, and never more
+   often than every LOC_GAP seconds, because a chatty HUD is wallpaper. */
+const LOC_GAP = 1.1, LOC_HOLD = 2.4;
+let locName = '', locT = 0, locSince = 99, locFires = 0;
+function showLocation(name) {
+  if (!name || name === locName || locSince < LOC_GAP) return false;
+  locName = name; locSince = 0; locT = LOC_HOLD; locFires++;
+  locLineEl.textContent = name;
+  locLineEl.style.opacity = 1;
+  return true;
+}
+function clearLocation() {
+  locName = ''; locT = 0; locSince = 99;
+  locLineEl.textContent = '';
+  locLineEl.style.opacity = 0;
+}
+function tickLocation() {
+  locSince += DT;
+  if (locT > 0) { locT -= DT; if (locT <= 0) locLineEl.style.opacity = 0; }
+  if (COURSE !== 'poco' || !CUR) return;
+  if (state === 'flight' || state === 'settle') {
+    const x = FLIGHT.on ? FLIGHT.x : activeP().ball.x;
+    const z = FLIGHT.on ? FLIGHT.z : activeP().ball.z;
+    showLocation(placeNameAt(x, z));
+  } else if (state === 'address') {
+    const p = activeP();
+    showLocation(placeNameAt(p.ball.x, p.ball.z));
+  }
+}
+
+/* ═══════════ FC-10 — THE FLYOVER CALLOUTS ═══════════
+   Two or three floating names per hole, pinned to the landmarks the flyover
+   actually flies over and projected through the live camera.  They exist
+   for exactly one reason: you should come out of a flyover knowing where in
+   PoCo you are about to play. */
+const CALLOUT_LEAD = 150;      // yd: how far out a name wakes up
+let calloutEls = [], calloutShown = 0;
+function resetCallouts() {
+  calloutsEl.innerHTML = '';
+  calloutEls = [];
+  calloutShown = 0;
+  if (COURSE !== 'poco' || !CUR || !CUR.scenery) return;
+  for (const c of (CUR.scenery.calls || [])) {
+    const d = document.createElement('div');
+    d.className = 'co';
+    d.textContent = CUR.scenery.names[c[2]] || '';
+    d.style.opacity = 0;
+    calloutsEl.appendChild(d);
+    calloutEls.push({ el: d, x: c[0], z: c[1], y: groundH(c[0], c[1]) + 9, on: 0 });
+  }
+}
+const _coV = new THREE.Vector3();
+function tickCallouts(show) {
+  for (const c of calloutEls) {
+    if (!show) { if (c.el.style.opacity !== '0') c.el.style.opacity = 0; continue; }
+    _coV.set(c.x, c.y, c.z);
+    _coV.project(camera);
+    const dist = Math.hypot(camera.position.x - c.x, camera.position.z - c.z);
+    const vis = _coV.z < 1 && Math.abs(_coV.x) < 0.84 && Math.abs(_coV.y) < 0.8 &&
+      dist < CALLOUT_LEAD && dist > 12;
+    if (vis) {
+      c.el.style.left = ((_coV.x * 0.5 + 0.5) * VW).toFixed(1) + 'px';
+      c.el.style.top = ((-_coV.y * 0.5 + 0.5) * VH).toFixed(1) + 'px';
+      const fade = clamp((CALLOUT_LEAD - dist) / 22, 0, 1) * clamp((dist - 14) / 9, 0, 1);
+      c.el.style.opacity = fade.toFixed(2);
+      if (!c.on && fade > 0.3) { c.on = 1; calloutShown++; }
+    } else if (c.el.style.opacity !== '0') {
+      c.el.style.opacity = 0;
+    }
+  }
+}
+
 /* score words */
 function scoreWord(strokes, par) {
   if (strokes === 1) return 'HOLE IN ONE!';
@@ -244,6 +319,13 @@ function startRound(diff, holes, label) {
 }
 function teePos(p) {
   const H = CUR;
+  /* FC-10: on poco you tee off a rubber mat lying on somebody's lawn, and
+     the converter slid that mat to real grass — so the ball stands on the
+     MAT, not on the bare end of the centerline. */
+  if (H.scenery && H.scenery.mat) {
+    const m = H.scenery.mat;
+    return [m[0] + (p.i === 0 ? -1.1 : 1.1), m[1]];
+  }
   const w = clWorld(H, 4, (p.i === 0 ? -1.2 : 1.2));
   return w;
 }
@@ -264,8 +346,13 @@ function startHole() {
     for (const p of PLAYERS) {
       const t = teePos(p);
       p.ball.x = t[0]; p.ball.z = t[1]; p.ball.y = groundH(t[0], t[1]);
-      p.strokes = 0; p.holed = false; p.teed = false; p.lie = 6;
+      p.strokes = 0; p.holed = false; p.teed = false;
+      // FC-10: poco has no tee box — the mat is on somebody's lawn, and the
+      // lawn is the lie (a clean one, which is why the mat is on a watered one)
+      p.lie = COURSE === 'poco' ? surfAt(p.ball.x, p.ball.z) : 6;
     }
+    clearLocation();
+    resetCallouts();
     turn = holeStartHonors;
     refreshHoleInfo();
     suggestClub(PLAYERS[turn]); aimAtPin(PLAYERS[turn]);
@@ -363,7 +450,7 @@ function beginTurn() {
   if (t < 0) { holeDone(); return; }
   turn = t;
   const p = activeP();
-  p.lie = p.teed ? surfAt(p.ball.x, p.ball.z) : 6;
+  p.lie = (p.teed || COURSE === 'poco') ? surfAt(p.ball.x, p.ball.z) : 6;
   if (CUR.swirl) rollWind(true);
   suggestClub(p);
   aimAtPin(p);
@@ -542,7 +629,11 @@ function waterDrop(res) {
   if (dx === null) { const t = teePos(p); dx = t[0]; dz = t[1]; }
   p.ball.x = dx; p.ball.z = dz; p.ball.y = groundH(dx, dz);
   p.lie = surfAt(dx, dz);
-  if (p.lie === 5) { const t = teePos(p); p.ball.x = t[0]; p.ball.z = t[1]; p.ball.y = groundH(t[0], t[1]); p.lie = 6; }
+  if (p.lie === 5) {
+    const t = teePos(p);
+    p.ball.x = t[0]; p.ball.z = t[1]; p.ball.y = groundH(t[0], t[1]);
+    p.lie = COURSE === 'poco' ? surfAt(t[0], t[1]) : 6;
+  }
   FLIGHT.x = p.ball.x; FLIGHT.y = p.ball.y; FLIGHT.z = p.ball.z;
   settleBall('SPLASH — DROP +1', WATER_TIPS[(Math.random() * WATER_TIPS.length) | 0]);
 }
@@ -551,6 +642,7 @@ function waterDrop(res) {
 function tickSim() {
   simTick++;
   if (bannerTimer > 0) { bannerTimer -= DT; if (bannerTimer <= 0) hideBanner(); }
+  tickLocation();                 // FC-10: "SOULE AVE", quietly, once
   if (flagBoost > 0) flagBoost -= DT;
   if (celebrating > 0) celebrating -= DT;
 
@@ -1098,6 +1190,8 @@ function updateCamera(dt) {
     }
     case 'pause': break;
   }
+  // FC-10: the hole's own landmarks, named in the air, during the flyover
+  if (calloutEls.length) tickCallouts(state === 'flyover');
 }
 
 /* ── main loop: fixed 60 Hz sim, decoupled render ── */
@@ -1150,12 +1244,23 @@ function rollToRest(x, z, vx, vz) {
     vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
     pathN: FLIGHT.pathN, touches: FLIGHT.touches };
   FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0; FLIGHT.rollT = 0;
+  FLIGHT.curbs = 0; FLIGHT.tramps = 0; FLIGHT.roofT = 0; FLIGHT.rims = 0;
   FLIGHT.x = x; FLIGHT.z = z; FLIGHT.y = groundH(x, z);
+  FLIGHT.lx = x; FLIGHT.lz = z;
   FLIGHT.vx = vx || 0; FLIGHT.vy = 0; FLIGHT.vz = vz || 0;
-  let n = 0, ev = null;
-  while (FLIGHT.on && n++ < 2400) { const r = tickBall(); if (r) { ev = r.ev; break; } }
+  let n = 0, ev = null, fences = 0, houses = 0;
+  /* FC-10: a fence or a house is something the roll goes THROUGH on its way
+     to rest, not the end of it — only stopped/holed/water end a roll. */
+  while (FLIGHT.on && n++ < 2400) {
+    const r = tickBall();
+    if (!r) continue;
+    if (r.ev === 'fence') { fences++; continue; }
+    if (r.ev === 'house' || r.ev === 'tramp') { houses++; continue; }
+    ev = r.ev; break;
+  }
   const out = { x: +FLIGHT.x.toFixed(2), z: +FLIGHT.z.toFixed(2), y: +FLIGHT.y.toFixed(2),
     t: +(n / 60).toFixed(2), surf: surfAt(FLIGHT.x, FLIGHT.z), ev,
+    curbs: FLIGHT.curbs || 0, fences, houses,
     moved: +Math.hypot(FLIGHT.x - x, FLIGHT.z - z).toFixed(2) };
   for (const k in sv) FLIGHT[k] = sv[k];
   return out;
@@ -1215,7 +1320,10 @@ window.__fc = {
       water: H.water.map(w => Object.assign({}, w)), bunkers: H.bunkers.length,
       scenery: H.scenery ? { houses: H.scenery.houses.length, trees: H.scenery.trees.length,
         streets: H.scenery.streets.length, regions: H.scenery.regions.length,
-        bigs: H.scenery.bigs.length, tramps: H.scenery.tramps.length } : null };
+        bigs: H.scenery.bigs.length, tramps: H.scenery.tramps.length,
+        lots: (H.scenery.lots || []).length, fences: (H.scenery.fences || []).length,
+        props: (H.scenery.props || []).length, signs: (H.scenery.signs || []).length,
+        calls: (H.scenery.calls || []).length } : null };
   },
   holeInfoText: () => holeInfoEl.textContent,
   // POCO witnesses: the sim volumes, exactly as tickBall sees them
@@ -1226,6 +1334,282 @@ window.__fc = {
     r: BUCKET.r, h: BUCKET.h } : null),
   paveAt: (x, z) => (FIELD && FIELD.pave ? FIELD.pave.at(x, z) : 0),
   surfName: (x, z) => SURF_NAMES[surfAt(x, z)],
+
+  /* ══════════════ FC-10 hooks — THE PLACE IS THE COURSE ══════════════ */
+  lots: () => (CUR && CUR.scenery ? (CUR.scenery.lots || []).map(l =>
+    ({ x: l[0], z: l[1], rot: l[2], a: l[3], b: l[4], dry: l[5] })) : []),
+  fences: () => FENCES.map(f => ({ ax: +f.ax.toFixed(2), az: +f.az.toFixed(2),
+    bx: +f.bx.toFixed(2), bz: +f.bz.toFixed(2), top: +f.top.toFixed(2) })),
+  curbs: () => CURBS.length,
+  signs: () => (CUR && CUR.scenery ? (CUR.scenery.signs || []).map(s =>
+    ({ x: s[0], z: s[1], a: CUR.scenery.names[s[3]] || '',
+       b: s[4] >= 0 ? (CUR.scenery.names[s[4]] || '') : '' })) : []),
+  signMesh: () => {
+    const m = HOLE_OBJS.find(o => o.isMesh && o.material === MAT_SIGN);
+    return m ? { tris: m.geometry.attributes.position.count / 3, tex: !!(MAT_SIGN && MAT_SIGN.map) } : null;
+  },
+  callouts: () => (CUR && CUR.scenery ? (CUR.scenery.calls || []).map(c => CUR.scenery.names[c[2]]) : []),
+  // "visible" means READABLE — a name fading in at 8% opacity is not up yet
+  calloutsVisible: () => calloutEls.filter(c => +c.el.style.opacity > 0.35).map(c => c.el.textContent),
+  calloutsShown: () => calloutShown,
+  places: () => (CUR && CUR.scenery ? (CUR.scenery.places || []).map(p => CUR.scenery.names[p[3]]) : []),
+  placeAt: (x, z) => placeNameAt(x, z),
+  locText: () => locLineEl.textContent,
+  locVisible: () => +locLineEl.style.opacity > 0.05,
+  locFires: () => locFires,
+  locClear: () => { clearLocation(); return true; },
+  doormat: () => (CUR && CUR.scenery ? CUR.scenery.mat : null),
+  /* A CENSUS OF THE GROUND: walk the corridor and count what surface the ONE
+     field says is there.  The FC-10 law "no fairway, no tee box, no fringe
+     anywhere on poco" is asserted through this. */
+  surfCensus: (step) => {
+    const H = CUR, st = step || 3;
+    const out = {};
+    const cor = (H.cor || 52) + 6;
+    for (let d = -8; d <= H.len + 20; d += st) {
+      for (let o = -cor; o <= cor; o += st) {
+        const w = clWorld(H, d, o);
+        const s = surfAt(w[0], w[1]);
+        out[s] = (out[s] || 0) + 1;
+      }
+    }
+    return out;
+  },
+  /* THE WATER LAW, live: where is the nearest water to the pail, and does any
+     lot touch water or stand below the local water surface + 0.3 yd? */
+  waterInfo: () => WATERS.map(w => ({ t: w.t, name: w.name || '',
+    wl: +(w.lvl ? w.lvl(w.t === 'strip' ? (w.d0 + w.d1) / 2 : w.d) : w.wl).toFixed(2) })),
+  bucketDry: () => {
+    const ring = [];
+    for (let a = 0; a < 8; a++) {
+      const th = TAU * a / 8;
+      ring.push([PIN.x + Math.cos(th) * 2.2, PIN.z + Math.sin(th) * 2.2]);
+    }
+    let minD = 99, wetRing = 0;
+    const probe = (x, z) => {
+      for (const w of WATERS) {
+        const dof = clDoff(CUR, x, z);
+        let e;
+        if (w.t === 'strip') {
+          const dd = dof[0] < w.d0 ? w.d0 - dof[0] : (dof[0] > w.d1 ? dof[0] - w.d1 : 0);
+          e = Math.max(dd, Math.abs(dof[1] - w.off) - w.w / 2);
+        } else if (w.t === 'pond') {
+          const dx = x - w.x, dz = z - w.z;
+          const lx = dx * w.tz - dz * w.tx, lz = dx * w.tx + dz * w.tz;
+          e = (Math.hypot(lx / w.rx, lz / w.rz) - 1) * Math.min(w.rx, w.rz);
+        } else e = Math.abs(dof[0] - w.d) - w.w / 2;
+        if (e < minD) minD = e;
+      }
+    };
+    probe(PIN.x, PIN.z);
+    const pinOnly = minD;
+    for (const [x, z] of ring) { probe(x, z); if (surfAt(x, z) === 5) wetRing++; }
+    return { hole: CUR.n, pinWater: +pinOnly.toFixed(2), ringWater: +minD.toFixed(2),
+      wetRing, pinSurf: surfAt(PIN.x, PIN.z), puttable: surfAt(PIN.x, PIN.z) === 2 &&
+        ring.filter(([x, z]) => surfAt(x, z) === 2).length >= 6 };
+  },
+  underwaterLots: () => {
+    const bad = [];
+    for (const l of (CUR.scenery.lots || [])) {
+      const c = Math.cos(l[2]), s = Math.sin(l[2]);
+      const pts = [[0, 0], [-l[3], -l[4]], [l[3], -l[4]], [l[3], l[4]], [-l[3], l[4]]];
+      for (const [u, v] of pts) {
+        const x = l[0] + u * c + v * s, z = l[1] - u * s + v * c;
+        const g = groundH(x, z);
+        if (surfAt(x, z) === 5) { bad.push({ x: +x.toFixed(1), z: +z.toFixed(1), why: 'in water' }); break; }
+        let worst = null;
+        for (const w of WATERS) {
+          const dof = clDoff(CUR, x, z);
+          /* the LOCAL water surface: the bank this lot stands on.  A creek
+             forty yards up a falling hillside is not this lot's water. */
+          let e;
+          if (w.t === 'strip') {
+            const dd = dof[0] < w.d0 ? w.d0 - dof[0] : (dof[0] > w.d1 ? dof[0] - w.d1 : 0);
+            e = Math.max(dd, Math.abs(dof[1] - w.off) - w.w / 2);
+          } else if (w.t === 'pond') {
+            const dx = x - w.x, dz = z - w.z;
+            const lx = dx * w.tz - dz * w.tx, lz = dx * w.tx + dz * w.tz;
+            e = (Math.hypot(lx / w.rx, lz / w.rz) - 1) * Math.min(w.rx, w.rz);
+          } else e = Math.abs(dof[0] - w.d) - w.w / 2;
+          if (e > 12) continue;
+          const wl = w.lvl ? w.lvl(dof[0]) : w.wl;
+          if (g < wl + 0.3) worst = { x: +x.toFixed(1), z: +z.toFixed(1), why: 'below ' + w.t,
+            g: +g.toFixed(2), wl: +wl.toFixed(2) };
+        }
+        if (worst) { bad.push(worst); break; }
+      }
+    }
+    return bad;
+  },
+  /* ═══ THE REACHABILITY LAW, proved on the BUILT ground ═══
+     Grass is a lawn, a park, a field or the canal verge — never scruff,
+     never pavement.  A landable patch is a disc 8 yd across that is all
+     grass.  The chain is the bottleneck path from the tee lawn to the
+     bucket's lawn; its longest hop must be inside 190 yd. */
+  grassChain: (maxHop) => {
+    const H = CUR, LIM = maxHop || 190, R = 4;
+    const isGrass = (x, z) => { const s = surfAt(x, z); return s === 8 || s === 10 || s === 2; };
+    const patch = (x, z) => {
+      if (!isGrass(x, z)) return false;
+      if (window.__fc.inHouse(x, groundH(x, z) + 0.2, z) >= 0) return false;
+      for (let a = 0; a < 8; a++) {
+        const th = TAU * a / 8;
+        if (!isGrass(x + Math.cos(th) * R, z + Math.sin(th) * R)) return false;
+      }
+      return true;
+    };
+    const P = [];
+    const cor = H.cor || 52;
+    for (let d = 0; d <= H.len + 6; d += 7) {
+      for (let o = -cor; o <= cor; o += 7) {
+        const w = clWorld(H, d, o);
+        if (patch(w[0], w[1])) P.push([w[0], w[1]]);
+      }
+    }
+    const t = clWorld(H, 4, 0);
+    const nodes = [[t[0], t[1]]].concat(P, [[PIN.x, PIN.z]]);
+    const N = nodes.length, CUPI = N - 1;
+    const best = new Float64Array(N).fill(Infinity);
+    const done = new Uint8Array(N);
+    best[0] = 0;
+    for (let it = 0; it < N; it++) {
+      let u = -1, bv = Infinity;
+      for (let i = 0; i < N; i++) if (!done[i] && best[i] < bv) { bv = best[i]; u = i; }
+      if (u < 0 || u === CUPI) break;
+      done[u] = 1;
+      for (let v = 1; v < N; v++) {
+        if (done[v]) continue;
+        const dist = Math.hypot(nodes[v][0] - nodes[u][0], nodes[v][1] - nodes[u][1]);
+        if (dist > LIM) continue;
+        const w = Math.max(bv, dist);
+        if (w < best[v]) best[v] = w;
+      }
+    }
+    return { hole: H.n, patches: P.length, gap: Number.isFinite(best[CUPI]) ? +best[CUPI].toFixed(1) : -1,
+      ok: Number.isFinite(best[CUPI]) && best[CUPI] <= LIM };
+  },
+  /* ═══ THE BOT ═══ it plays the live hole with the REAL integrator and the
+     REAL shot planner: for each stroke it runs a small search of club /
+     power / aim through tickBall itself, takes the line that ends nearest
+     the pail, and then plays exactly that shot.  If this thing cannot get
+     round in par + 3 the hole is not playable, whatever the map says. */
+  botPlay: (opts) => {
+    const O = opts || {};
+    const cap = O.cap || (CUR.par + 6);
+    const sd = DIFF; DIFF = 'amateur';
+    const sv = { on: FLIGHT.on, mode: FLIGHT.mode, x: FLIGHT.x, y: FLIGHT.y, z: FLIGHT.z,
+      vx: FLIGHT.vx, vy: FLIGHT.vy, vz: FLIGHT.vz, t: FLIGHT.t, rollT: FLIGHT.rollT,
+      pathN: FLIGHT.pathN, touches: FLIGHT.touches, runK: FLIGHT.runK };
+    const sa = SHOT.aimAng, scl = SHOT.club, sput = SHOT.putter, spm = SHOT.puttMax;
+    QUIET++;
+    const t0 = clWorld(CUR, 4, -1.2);
+    let bx = t0[0], bz = t0[1], strokes = 0, holed = false;
+    const log = [];
+    const run = () => {
+      let n = 0, ev = null, res = null;
+      while (FLIGHT.on && n++ < 4000) {
+        const r = tickBall();
+        if (r && (r.ev === 'stopped' || r.ev === 'holed' || r.ev === 'water')) { ev = r.ev; res = r; break; }
+      }
+      return { ev, res, x: FLIGHT.x, z: FLIGHT.z };
+    };
+    const shoot = (x, z, lie, ang, club, power) => {
+      const tmp = { ball: { x, y: groundH(x, z), z }, lie };
+      SHOT.aimAng = ang; SHOT.club = club; SHOT.putter = false;
+      launchShot(tmp, power);
+      return run();
+    };
+    const putt = (x, z, lie, ang, power) => {
+      const tmp = { ball: { x, y: groundH(x, z), z }, lie };
+      SHOT.aimAng = ang; SHOT.putter = true;
+      launchPutt(tmp, power);
+      return run();
+    };
+    while (strokes < cap && !holed) {
+      const lie = surfAt(bx, bz);
+      const dPin = Math.hypot(PIN.x - bx, PIN.z - bz);
+      const aim0 = Math.atan2(PIN.x - bx, PIN.z - bz);
+      if (dPin < (BUCKET ? BUCKET.r : 0.42)) { holed = true; break; }
+      let pick = null;
+      if (lie === 2 || (lie !== 5 && dPin < 12)) {
+        /* the putter's power scale is written in GREEN speed; off the green
+           the same stroke dies in a third of the distance, so the bot asks
+           for the roll it wants in the units the surface actually rolls in */
+        const muK = surfMu(lie) / greenMu();
+        SHOT.puttMax = clamp(dPin * 2.5 * muK, 6, 90);
+        for (const k of [0.8, 0.9, 1.0, 1.1, 1.25]) {
+          const pw = clamp(dPin * muK * k / SHOT.puttMax, 0.05, 1);
+          const r = putt(bx, bz, lie, aim0, pw);
+          const d2 = r.ev === 'holed' ? -1 : Math.hypot(PIN.x - r.x, PIN.z - r.z) +
+            (r.ev === 'water' ? 40 : 0);
+          if (!pick || d2 < pick.d) pick = { d: d2, kind: 'putt', pw, ang: aim0 };
+        }
+        /* …AND THE PUTTER IS NOT ALWAYS THE ANSWER.  Sat in the gutter
+           against a kerb, or behind a fence, every putt dies in the same
+           foot of ground; a player picks a wedge and lifts it out.  If the
+           best putt cannot improve the position, the bot does the same. */
+        if (pick && pick.d < dPin - 0.9) {
+          strokes++;
+          const r = putt(bx, bz, lie, pick.ang, pick.pw);
+          log.push({ s: strokes, kind: 'putt', ev: r.ev, d: +Math.hypot(PIN.x - r.x, PIN.z - r.z).toFixed(1) });
+          if (r.ev === 'holed') { holed = true; break; }
+          if (r.ev === 'water') { strokes++; const dr = r.res; bx = dr.dropX === null ? t0[0] : dr.dropX;
+            bz = dr.dropZ === null ? t0[1] : dr.dropZ; } else { bx = r.x; bz = r.z; }
+          continue;
+        }
+        pick = null;
+      }
+      // the planner: which club, how hard, and how far off the pin to aim
+      const mul = lieMul(lie);
+      let base = 0;
+      for (let ci = CLUBS.length - 1; ci >= 0; ci--) {
+        if (CLUBS[ci].carry * mul >= dPin - 6) { base = ci; break; }
+      }
+      const clubs = [];
+      for (const off of [-2, -1, 0, 1, 2]) {
+        const ci = base + off;
+        if (ci >= 0 && ci < CLUBS.length && clubs.indexOf(ci) < 0) clubs.push(ci);
+      }
+      const powers = dPin < 20 ? [0.08, 0.14, 0.22, 0.34, 0.5]
+                   : dPin < 60 ? [0.25, 0.45, 0.68, 0.9] : [0.62, 0.8, 0.95];
+      for (const ci of clubs) {
+        for (const pw of powers) {
+          for (const da of [-0.13, -0.05, 0, 0.05, 0.13]) {
+            const r = shoot(bx, bz, lie, aim0 + da, ci, pw);
+            let score = r.ev === 'holed' ? -50 : Math.hypot(PIN.x - r.x, PIN.z - r.z);
+            if (r.ev === 'water') score += 60;
+            const s2 = surfAt(r.x, r.z);
+            if (s2 === 4) score += 9;
+            if (s2 === 9) score += 5;
+            if (s2 === 7) score += 2;
+            /* A SHOT THAT DOES NOT MOVE THE BALL IS NOT A SHOT.  Trapped
+               against a house wall or a fence line, the nearest-to-the-pin
+               score happily picks standing still forever; this makes the bot
+               take the escape instead — the same thing a player would. */
+            if (r.ev !== 'holed' && Math.hypot(r.x - bx, r.z - bz) < 2.5) score += 120;
+            if (!pick || score < pick.d) pick = { d: score, kind: 'full', ci, pw, ang: aim0 + da };
+          }
+        }
+      }
+      strokes++;
+      const r = shoot(bx, bz, lie, pick.ang, pick.ci, pick.pw);
+      log.push({ s: strokes, kind: CLUBS[pick.ci].n, ev: r.ev,
+        d: +Math.hypot(PIN.x - r.x, PIN.z - r.z).toFixed(1), surf: SURF_NAMES[surfAt(r.x, r.z)] });
+      if (r.ev === 'holed') { holed = true; break; }
+      if (r.ev === 'water') {
+        strokes++;
+        const dr = r.res;
+        bx = dr.dropX === null ? t0[0] : dr.dropX;
+        bz = dr.dropZ === null ? t0[1] : dr.dropZ;
+      } else { bx = r.x; bz = r.z; }
+    }
+    QUIET--;
+    FLIGHT.on = false;
+    for (const k in sv) FLIGHT[k] = sv[k];
+    DIFF = sd; SHOT.aimAng = sa; SHOT.club = scl; SHOT.putter = sput; SHOT.puttMax = spm;
+    SHOT.arcDirty = true; MAPS.dirty = true;
+    return { hole: CUR.n, par: CUR.par, strokes, holed, vsPar: strokes - CUR.par, log };
+  },
   /* is a world point inside — or standing on top of — any house box?
      THE NEVER-RESTS-ON-A-ROOF INVARIANT is asserted through this. */
   inHouse: (x, y, z) => {
@@ -1275,7 +1659,7 @@ window.__fc = {
       pathN: FLIGHT.pathN, touches: FLIGHT.touches, rims: FLIGHT.rims };
     QUIET++;
     FLIGHT.on = true; FLIGHT.mode = 'roll'; FLIGHT.t = 0; FLIGHT.rollT = 0;
-    FLIGHT.rims = 0; FLIGHT.tramps = 0; FLIGHT.roofT = 0;
+    FLIGHT.rims = 0; FLIGHT.tramps = 0; FLIGHT.roofT = 0; FLIGHT.curbs = 0; FLIGHT.fences = 0;
     // start straight downhill-agnostic: aim the roll at the cup from -z local
     const gx = GREEN.tx, gz = GREEN.tz;
     FLIGHT.x = PIN.x - gx * d; FLIGHT.z = PIN.z - gz * d;

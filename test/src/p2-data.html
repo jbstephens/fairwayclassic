@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-9-POCO';
+const BUILD_TAG = 'FC-10-PLACE';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -78,7 +78,8 @@ const hudEl = el('hud'), holeInfoEl = el('holeInfo'), windArrowEl = el('windArro
   cardTitleEl = el('cardTitle'), cardWordEl = el('cardWord'), cardTableEl = el('cardTable'),
   cardVsEl = el('cardVs'), cardHintEl = el('cardHint'), pauseUI = el('pauseUI'),
   pauseOptsEl = el('menuOptsP'), fadeBlackEl = el('fadeBlack'), titleBestEl = el('titleBest'),
-  titleJoinEl = el('titleJoin'), titlePressEl = el('titlePress');
+  titleJoinEl = el('titleJoin'), titlePressEl = el('titlePress'),
+  locLineEl = el('locLine'), calloutsEl = el('callouts');
 
 /* letterbox scaler */
 function fitStage() {
@@ -753,6 +754,28 @@ const SFX = {
     tone(168 * dt2, t, 0.11, 0.15 * k, 'sine', 96);                          // stud bay
     tone(252 * dt2 * 1.007, t, 0.085, 0.09 * k, 'triangle', 141);
     noiseBurst(t, 0.07, 0.12 * k, 520 * dt2, 220, 0.8, 'lowpass'); },        // wall slap
+  /* ══ FC-10 — the kerb and the back-yard fence ══
+     the kerb: a ball that has run out of pace clipping concrete.  Tiny, dry
+     and high — a tick, not a thud — over a breath of scuff as it drops into
+     the gutter.  Scaled by how hard it hit the lip. */
+  curb(v) { if (!AC) return; const t = AC.currentTime;
+    const k = clamp(v === undefined ? 0.5 : v, 0.12, 1);
+    const dt2 = 1 + (Math.random() - 0.5) * 0.14;
+    noiseBurst(t, 0.005, 0.11 * k, 6200 * dt2, 3400, 1.0, 'highpass');
+    tone(1460 * dt2, t, 0.035, 0.05 * k, 'triangle', 980);
+    tone(2270 * dt2 * 1.009, t, 0.025, 0.028 * k, 'sine', 1600);
+    noiseBurst(t + 0.02, 0.09, 0.035 * k, 900 * dt2, 420, 0.7, 'lowpass'); },
+  /* the fence: a fence board is a PLANK — a drier, higher, rattlier cousin
+     of the house thunk, with the panel ringing after the strike. */
+  fence(v) { if (!AC) return; const t = AC.currentTime;
+    const k = clamp(v === undefined ? 0.7 : v, 0.2, 1);
+    const dt2 = 1 + (Math.random() - 0.5) * 0.12;
+    noiseBurst(t, 0.006, 0.17 * k, 4600 * dt2, 2400, 0.9, 'highpass');   // the slap
+    tone(232 * dt2, t, 0.09, 0.12 * k, 'triangle', 148);                 // the board
+    tone(389 * dt2 * 1.013, t, 0.07, 0.07 * k, 'sine', 240);
+    noiseBurst(t + 0.004, 0.05, 0.08 * k, 1500 * dt2, 700, 1.1);         // pickets
+    for (let i = 0; i < 2; i++)
+      noiseBurst(t + 0.06 + i * 0.05, 0.02, (0.045 - i * 0.016) * k, 2600 - i * 500, 1400, 1.8); },
   // the bucket takes it: hollow plastic TONK, then the ball rattling round
   // the pail.  Body = a resonant band around 330 Hz over a lowpassed thump;
   // the rattle is four decaying ticks at shrinking intervals.
