@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 const VW = 1280, VH = 720;
 const DT = 1 / 60;
-const BUILD_TAG = 'FC-10-PLACE';
+const BUILD_TAG = 'FC-11-EAGLE';
 window.__fcBuild = BUILD_TAG;
 
 const QS = new URLSearchParams(location.search);
@@ -741,6 +741,21 @@ const SFX = {
   flutter() { if (!AC) return; const t = AC.currentTime;
     for (let i = 0; i < 6; i++)
       noiseBurst(t + i * 0.055, 0.026, 0.05, 950, 520, 0.8, 'lowpass'); },
+  // FC-11 eagle beat: the movie "bald eagle" scream (really a red-tailed
+  // hawk, which is the joke): a piercing gliss falling through a raspy
+  // noise formant, tail flutter on the release.  dist = far/quiet or close.
+  eagleCry(dist) { if (!AC) return; const t = AC.currentTime;
+    const d = 1 + (Math.random() - 0.5) * 0.06, v = dist ? 0.10 : 0.22;
+    tone(2350 * d, t, 0.85, v, 'sawtooth', 1150 * d);
+    tone(2360 * d * 1.006, t + 0.02, 0.8, v * 0.55, 'sawtooth', 1180 * d);
+    noiseSweep(t, 0.9, v * 0.8, 2600 * d, 3300 * d, 900, 6.5);
+    noiseBurst(t + 0.62, 0.28, v * 0.4, 1400 * d, 700, 2.2); },
+  // heavy wingbeats: deep low-passed whumps, slower than the cardinal
+  wingHeavy(n) { if (!AC) return; const t = AC.currentTime;
+    for (let i = 0; i < (n || 3); i++) {
+      noiseBurst(t + i * 0.34, 0.12, 0.11, 420, 180, 0.8, 'lowpass');
+      tone(72, t + i * 0.34, 0.1, 0.05, 'sine', 48);
+    } },
   bounce() { if (!AC) return; const t = AC.currentTime;
     tone(130, t, 0.04, 0.05, 'sine', 85);
     noiseBurst(t, 0.025, 0.05, 800, 480, 1.2); },

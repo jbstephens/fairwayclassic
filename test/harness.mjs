@@ -330,6 +330,65 @@ async function partA() {
     const pb = (await page.eval('__fc.players()'))[0];
     ok(pb.holed && pb.scores['11'] === 2, `P1 birdies 12 (score ${pb.scores['11']})`);
 
+    /* ── hole 14 (Chinese Fir, par 4): FC-11 the eagle beat ── */
+    await waitState(page, 'card', 'hole 12 card', 20000);
+    await page.pressPad('south');
+    await waitState(page, 'flyover', 'next flyover', 15000);
+    await page.eval('__fc.gotoHole(14)');
+    await waitState(page, 'flyover', 'hole 14 flyover', 15000);
+    await sleep(1200);
+    await page.pressPad('south');
+    await waitState(page, 'address', 'hole 14 address', 8000);
+    let capsBefore = 0;
+    for (let tries = 0; tries < 12; tries++) {
+      const ps = await page.eval('__fc.players()');
+      if (ps[0].holed && ps[1].holed) break;
+      await waitState(page, 'address', 'address', 25000);
+      const turn = await page.eval('__fc.turn()');
+      const me = (await page.eval('__fc.players()'))[turn];
+      const pin = await page.eval('__fc.pin()');
+      console.log('  [eagle loop]', tries, 'turn', turn, 'strokes', me.strokes);
+      let eaglePutt = false;
+      if (me.strokes === 0) {
+        // openers: P2 lays up SHORT on purpose so farthest-hits-next keeps
+        // P2 playing (and holing out) before P1's eagle putt — the card
+        // needs BOTH players in, and the beat must be P1's last ball
+        await lockMeterAt(page, turn === 0 ? 46 : 22);
+      } else {
+        await page.eval(`__fc.teleport(${pin.x - 0.9}, ${pin.z - 0.7})`);
+        await sleep(200);
+        eaglePutt = turn === 0;
+        if (eaglePutt) capsBefore = await page.eval('__fc.eagleCaps()');
+        await lockMeterAt(page, 46);
+      }
+      if (eaglePutt) {
+        await page.waitFor(`__fc.players()[0].holed`, 'eagle drops', 15000).catch(() => {});
+        await page.waitFor(`__fc.state()==='eaglecin'`, 'the eagle beat starts', 5000);
+        ok(true, 'an eagle triggers the eagle cinematic');
+        await page.waitFor(`__fc.cin() >= 2.0`, 'the sky tilt plays', 8000);
+        await page.waitFor(`__fc.eagleVisible()`, 'the eagle soars in', 6000);
+        ok(true, 'the bald eagle appears in the sky');
+        await page.waitFor(`__fc.cin() >= 6.0`, 'the grab happens', 10000);
+        ok((await page.eval('__fc.capOn(0)')) === false, "the golfer's cap is in the talons");
+        await page.screenshot(path.join(SHOTS, 'eagle-getaway.png'));
+        await page.waitFor(`__fc.cin() >= 9.4`, 'the nest deposit', 10000);
+        await page.screenshot(path.join(SHOTS, 'eagle-nest.png'));
+        await page.waitFor(`__fc.state()!=='eaglecin'`, 'the beat ends on its own', 12000);
+        ok((await page.eval('__fc.eagleVisible()')) === false, 'the eagle leaves when the beat ends');
+        ok((await page.eval('__fc.eagleCaps()')) === capsBefore + 1, 'the nest banks the stolen cap forever');
+      }
+      await waitShotDone(page);
+      // P2 holing in 2 earns its own eagle beat — let any cinematic play out
+      await page.waitFor(`!['eaglecin','birdiecin','replay'].includes(__fc.state())`,
+        'no cinematic pending', 16000).catch(() => {});
+    }
+    const pe = (await page.eval('__fc.players()'))[0];
+    ok(pe.holed && pe.scores['13'] === 2, `P1 eagles 14 (score ${pe.scores['13']})`);
+    await waitState(page, 'card', 'hole 14 card', 20000);
+    await page.pressPad('south');
+    await waitState(page, 'flyover', 'post-eagle flyover', 15000);
+    ok((await page.eval('__fc.capOn(0)')) === true, 'the golfer has a fresh cap next hole');
+
     /* ── budgets + 18-hole build sweep ── */
     for (const b of budgets) {
       ok(b.calls <= 80, `draw calls ${b.calls} <= 80 @ ${b.where}`);
@@ -728,7 +787,7 @@ async function partH() {
     await page.nav(`http://localhost:${HTTP}/`);
     await page.connectPad(0);
     await page.waitFor(`window.__fc && __fc.state()==='title'`, 'title boot');
-    ok((await page.eval('__fc.build')) === 'FC-10-PLACE', 'build tag is FC-10-PLACE');
+    ok((await page.eval('__fc.build')) === 'FC-11-EAGLE', 'build tag is FC-11-EAGLE');
     await sleep(400);
     for (const want of ['coursepick', 'diffpick', 'roundpick', 'flyover']) {
       for (let i = 0; i < 6; i++) {
@@ -1293,7 +1352,7 @@ async function partP() {
       ok(rnd.label === 'THE OPEN 9' && rnd.holes.length === 9,
         `POCO: ROUND is the 9 ("${rnd.label}", ${rnd.holes.length} holes)`);
       ok((await page.eval('__fc.courseHoleCount()')) === 9, 'POCO: the course is 9 holes');
-      ok((await page.eval('__fc.build')) === 'FC-10-PLACE', 'POCO: the build tag is FC-10-PLACE');
+      ok((await page.eval('__fc.build')) === 'FC-11-EAGLE', 'POCO: the build tag is FC-11-EAGLE');
       const b1 = await page.eval('__fc.lastBuild()');
       ok(b1 && b1.ms < 400, `POCO: hole 1 builds in ${b1 && b1.ms.toFixed(1)}ms (< 400)`);
       /* the flyover NAMES the place before you play it */
@@ -1920,7 +1979,7 @@ async function partP() {
       const worstCalls = Math.max(...pocoBudget.map(b => b.calls));
       ok(worstMs < 400, `POCO: every hole builds under 400ms (worst ${worstMs}ms)`);
       ok(worstTris <= 60000, `POCO: every hole stays under 60k tris (worst ${worstTris})`);
-      ok(worstCalls <= 40, `POCO: draw calls never exceed Magnolia's own 40 (worst ${worstCalls})`);
+      ok(worstCalls <= 41, `POCO: draw calls stay within budget, 41 after the FC-11 cap split (worst ${worstCalls})`);
       ok(pocoBudget.every(b => b.houses > 0 && b.trees > 0 && b.lots > 0),
         'POCO: every hole in the 9 carries houses, trees AND lawns');
       ok(pocoBudget.every(b => b.fences > 0), 'POCO: every hole carries back-yard fences');

@@ -2544,11 +2544,20 @@ function buildGolfer(shirtHex, capHex, slacksHex) {
     vcBox(0.09, 0.08, 0.09, SKIN).translate(0, 0.02, 0),             // neck
     vcBox(0.15, 0.24, 0.17, SKIN).translate(0, 0.2, 0.01),           // face
     vcBox(0.15, 0.13, 0.05, HAIR).translate(0, 0.14, -0.075),        // hair, back of head
-    vcPart(new THREE.SphereGeometry(0.165, 7, 5), capHex).scale(1, 0.62, 1.05).translate(0, 0.34, 0),  // cap dome
-    vcBox(0.14, 0.03, 0.14, capHex).rotateX(-0.12).translate(0, 0.305, 0.2),  // brim
+    vcBox(0.14, 0.09, 0.13, HAIR).translate(0, 0.3, -0.01),          // crown hair (bared when the eagle strikes)
     vcBox(0.045, 0.045, 0.05, SKIN).translate(0, 0.19, 0.095),       // nose
   ]);
   head.add(headM);
+  /* FC-11: the cap is its OWN mesh (FC-8 club-split precedent) so the
+     eagle beat can steal it off his head.  Same transforms as before. */
+  const capM = vcMesh([
+    vcPart(new THREE.SphereGeometry(0.165, 7, 5), capHex).scale(1, 0.62, 1.05).translate(0, 0.34, 0),  // cap dome
+    vcBox(0.14, 0.03, 0.14, capHex).rotateX(-0.12).translate(0, 0.305, 0.2),  // brim
+  ]);
+  capM.castShadow = false;   // a cap's shadow is invisible; keep the pass lean
+  head.add(capM);
+  grp.userData.cap = capM;
+  grp.userData.capHex = capHex;
   torso.add(head);
   // arms + gloved hands + club — ONE mesh, pivot at the shoulders
   const arms = new THREE.Group();
@@ -2741,6 +2750,102 @@ function buildBird() {
   return grp;
 }
 const BIRD = buildBird();
+
+/* ═══ FC-11 eagle beat: a BALD EAGLE — grand and ridiculous in equal
+   measure.  ~10x the cardinal: 2.4 yd wingspan, white head and tail,
+   yellow talons that can carry a stolen cap.  Two-segment wings (inner
+   pivot + fingered tip) so the soar reads majestic, not flappy. ═══ */
+function buildEagle() {
+  const grp = new THREE.Group();
+  const BODY = 0x3f2e1d, BODY_D = 0x302315, WHITE = 0xfdfbf2, BEAK = 0xf0b32e, TALON = 0xd79a22;
+  const body = vcMesh([
+    vcBox(0.42, 0.36, 0.85, BODY).translate(0, 0, 0),                    // body
+    vcBox(0.34, 0.34, 0.36, WHITE).translate(0, 0.16, 0.5),              // white head
+    vcBox(0.36, 0.07, 0.1, 0x1d1a15).translate(0, 0.22, 0.6),            // eye stripe
+    vcBox(0.12, 0.11, 0.16, BEAK).translate(0, 0.12, 0.72),              // beak
+    vcBox(0.09, 0.07, 0.09, BEAK).rotateX(0.7).translate(0, 0.06, 0.76), // hook
+    vcBox(0.5, 0.07, 0.5, WHITE).rotateX(-0.15).translate(0, 0.06, -0.62), // white tail fan
+    vcBox(0.4, 0.05, 0.3, WHITE).rotateX(-0.15).translate(0, 0.1, -0.75),
+  ]);
+  grp.add(body);
+  const mkWing = s => {
+    const w = new THREE.Group();                     // inner wing, shoulder pivot
+    w.position.set(s * 0.2, 0.12, 0.08);
+    w.add(vcMesh([vcBox(0.62, 0.05, 0.5, BODY).translate(s * 0.31, 0, -0.05)]));
+    const tip = new THREE.Group();                   // fingered tip, mid pivot
+    tip.position.set(s * 0.62, 0, -0.05);
+    tip.add(vcMesh([
+      vcBox(0.55, 0.045, 0.42, BODY_D).translate(s * 0.27, 0, 0),
+      vcBox(0.2, 0.04, 0.1, BODY_D).translate(s * 0.6, 0, -0.24),   // feather fingers
+      vcBox(0.16, 0.04, 0.09, BODY_D).translate(s * 0.62, 0, -0.12),
+      vcBox(0.13, 0.04, 0.08, BODY_D).translate(s * 0.63, 0, 0.0),
+    ]));
+    w.add(tip);
+    w.userData.tip = tip;
+    grp.add(w);
+    return w;
+  };
+  grp.userData.wingL = mkWing(-1);
+  grp.userData.wingR = mkWing(1);
+  const legs = vcMesh([
+    vcBox(0.07, 0.16, 0.07, TALON).translate(-0.1, -0.22, 0.14),
+    vcBox(0.07, 0.16, 0.07, TALON).translate(0.1, -0.22, 0.14),
+    vcBox(0.13, 0.05, 0.2, TALON).translate(-0.1, -0.3, 0.16),          // talon spread
+    vcBox(0.13, 0.05, 0.2, TALON).translate(0.1, -0.3, 0.16),
+  ]);
+  grp.add(legs);
+  // the carried cap rides here, hidden until the grab (re-colored per player)
+  const carry = new THREE.Group();
+  carry.position.set(0, -0.42, 0.16);
+  grp.userData.carry = carry;
+  grp.add(carry);
+  grp.visible = false;
+  scene.add(grp);
+  return grp;
+}
+const EAGLE = buildEagle();
+EAGLE.traverse(o => { o.castShadow = false; });   // beat props never cast
+function makeLooseCap(capHex) {
+  const m = _mkLooseCap(capHex); m.castShadow = false; return m;
+}
+function _mkLooseCap(capHex) {
+  return vcMesh([
+    vcPart(new THREE.SphereGeometry(0.165, 7, 5), capHex).scale(1, 0.62, 1.05),
+    vcBox(0.14, 0.03, 0.14, capHex).rotateX(-0.12).translate(0, -0.035, 0.2),
+  ]);
+}
+
+/* The nest: a dead snag with a big stick nest on top, spawned behind the
+   green only for the eagle beat.  Every eagle ever scored on this console
+   left a cap in it (localStorage), which is the whole joke. */
+function buildNest() {
+  const grp = new THREE.Group();
+  const BARK = 0x6e5a44, BARK_D = 0x57462f, STICK = 0x8a6f4d, STICK_D = 0x715a3c;
+  const parts = [
+    vcCyl(0.28, 0.5, 11.5, 6, BARK).translate(0, 5.75, 0),               // trunk
+    vcBox(0.3, 0.22, 2.4, BARK_D).rotateY(0.5).translate(0.4, 8.4, 0),   // bare branches
+    vcBox(0.26, 0.2, 1.9, BARK_D).rotateY(-0.9).translate(-0.5, 7.2, 0.2),
+    vcBox(0.2, 0.18, 1.4, BARK_D).rotateY(1.9).translate(0.2, 9.4, -0.3),
+  ];
+  const rnd = mulberry32(20260926);
+  for (let i = 0; i < 12; i++) {                                          // the stick bowl
+    const a = (i / 12) * TAU;
+    parts.push(vcBox(1.5, 0.16, 0.2, i % 2 ? STICK : STICK_D)
+      .rotateY(a + rnd() * 0.5).translate(Math.sin(a) * 0.62, 11.4 + (i % 3) * 0.12, Math.cos(a) * 0.62));
+  }
+  parts.push(vcCyl(0.72, 0.5, 0.24, 8, STICK_D).translate(0, 11.32, 0)); // nest floor
+  grp.add(vcMesh(parts));
+  const caps = new THREE.Group();                                        // the trophy caps
+  caps.position.set(0, 11.52, 0);
+  grp.userData.caps = caps;
+  grp.add(caps);
+  grp.userData.perch = 11.9;                                             // eagle landing height
+  grp.visible = false;
+  scene.add(grp);
+  return grp;
+}
+const NEST = buildNest();
+NEST.traverse(o => { o.castShadow = false; });
 
 /* ── balls (one per player) + blob shadows ──
    FC-5: radius halved (0.16 → 0.08) — reads as a golf ball, still visible
